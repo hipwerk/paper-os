@@ -217,6 +217,16 @@ fn words_to_bytes(words: &[u16], bytes: &mut [u8]) {
     }
 }
 
+/// Converts four PaperOS Gray4 pixels into the IT8951 packed-write word.
+///
+/// PaperOS stores pixels from the most-significant nibble of each byte, while
+/// the IT8951 little-endian packed format numbers the first pixel from the
+/// least-significant nibble of the 16-bit word. For source bytes `01 23`, the
+/// controller word is therefore `3210`.
+const fn controller_gray4_word(first: u8, second: u8) -> u16 {
+    u16::from_le_bytes([first.rotate_left(4), second.rotate_left(4)])
+}
+
 /// Lowest common protocol operations, implemented by Linux SPI or an MCU HAL.
 ///
 /// Each method represents one complete IT8951 transaction, including its
@@ -299,6 +309,8 @@ pub enum Error<E> {
     Transport(E),
     /// The controller returned an empty panel size.
     InvalidDeviceInfo,
+    /// The controller returned an unusable image-buffer base address.
+    InvalidImageBufferAddress(u32),
     /// The controller returned a zero or implausible VCOM magnitude.
     InvalidVcomResponse,
     /// The display engine remained busy for the complete configured budget.
@@ -326,6 +338,10 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
         match self {
             Self::Transport(error) => write!(formatter, "IT8951 transport error: {error}"),
             Self::InvalidDeviceInfo => formatter.write_str("IT8951 returned an invalid panel size"),
+            Self::InvalidImageBufferAddress(address) => write!(
+                formatter,
+                "IT8951 returned an invalid image-buffer address 0x{address:08x}"
+            ),
             Self::InvalidVcomResponse => formatter.write_str("IT8951 returned an invalid VCOM"),
             Self::DisplayTimeout => formatter.write_str("IT8951 display engine timed out"),
             Self::DeviceChanged { .. } => {
@@ -353,6 +369,7 @@ where
         match self {
             Self::Transport(error) => Some(error),
             Self::InvalidDeviceInfo
+            | Self::InvalidImageBufferAddress(_)
             | Self::InvalidVcomResponse
             | Self::DisplayTimeout
             | Self::DeviceChanged { .. }
@@ -395,6 +412,21 @@ impl<T: Transport> Controller<T> {
         let info = DeviceInfo::from_words(&words);
         if info.panel_size.is_empty() {
             return Err(Error::InvalidDeviceInfo);
+        }
+        let maximum_buffer_bytes = info
+            .panel_size
+            .width
+            .checked_mul(info.panel_size.height)
+            .filter(|bytes| *bytes != 0);
+        let address_is_plausible = info.image_buffer_address != 0
+            && info.image_buffer_address.is_multiple_of(2)
+            && maximum_buffer_bytes.is_some_and(|bytes| {
+                info.image_buffer_address
+                    .checked_add(bytes.saturating_sub(1))
+                    .is_some()
+            });
+        if !address_is_plausible {
+            return Err(Error::InvalidImageBufferAddress(info.image_buffer_address));
         }
         Ok(info)
     }
@@ -630,7 +662,7 @@ impl<T: Transport> It8951Display<T> {
             let start = row * request.stride_bytes;
             request.pixels[start..start + row_bytes]
                 .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .map(|pair| controller_gray4_word(pair[0], pair[1]))
         });
         self.controller
             .transport
@@ -722,7 +754,7 @@ mod tests {
         COMMAND_DISPLAY_BUFFER_AREA, COMMAND_GET_DEVICE_INFO, COMMAND_LOAD_IMAGE_AREA,
         COMMAND_LOAD_IMAGE_END, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo,
         DisplayWait, Error, It8951Display, LutFamily, ProbeReport, Transport, UpdateError,
-        VcomMillivolts,
+        VcomMillivolts, controller_gray4_word,
     };
 
     #[derive(Default)]
@@ -888,6 +920,26 @@ mod tests {
     }
 
     #[test]
+    fn device_info_rejects_unusable_image_buffer_addresses() {
+        for address in [0, 1, u32::MAX - 1] {
+            let info = DeviceInfo {
+                image_buffer_address: address,
+                ..device_info(b"M641")
+            };
+            let transport = FakeTransport {
+                reads: words_for_device_info(info),
+                ..FakeTransport::default()
+            };
+            let mut controller = Controller::new(transport);
+
+            assert_eq!(
+                controller.device_info(),
+                Err(Error::InvalidImageBufferAddress(address))
+            );
+        }
+    }
+
+    #[test]
     fn setting_vcom_is_a_separate_explicit_operation() {
         let transport = FakeTransport {
             reads: vec![1_500],
@@ -989,7 +1041,7 @@ mod tests {
         let operations = display.into_controller().into_transport().operations;
 
         assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_AREA)));
-        assert!(operations.contains(&Operation::WriteMany(vec![0x2301, 0x6745])));
+        assert!(operations.contains(&Operation::WriteMany(vec![0x3210, 0x7654])));
         assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_END)));
         let display_command = operations
             .iter()
@@ -998,6 +1050,13 @@ mod tests {
         assert_eq!(operations[display_command + 5], Operation::Write(0));
         assert_eq!(operations[display_command + 6], Operation::Write(0x5678));
         assert_eq!(operations[display_command + 7], Operation::Write(0x1234));
+    }
+
+    #[test]
+    fn gray4_adapter_matches_controller_pixel_numbering() {
+        // PaperOS bytes 01 23 encode left-to-right pixels 0, 1, 2, 3.
+        // IT8951 packed-write Figure 7-17 places the first pixel in the low nibble.
+        assert_eq!(controller_gray4_word(0x01, 0x23), 0x3210);
     }
 
     #[test]

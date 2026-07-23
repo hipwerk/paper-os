@@ -28,6 +28,11 @@ maintainability.
   duration keep it powered indefinitely?
 - Does a framebuffer upload use a bulk transaction where the controller permits
   it instead of repeating one preamble per packed word?
+- Does a packed-format adapter convert between the PaperOS MSB-first contract and
+  the controller's documented pixel order, with an authoritative vector test?
+- Does a refresh require pinned firmware/LUT identity, a plausible image-buffer
+  address, and an SPI rate within the audited bound?
+- Do SIGHUP and unexpected scope exits make a best-effort sleep request?
 - Does an explicit VCOM write verify controller readback?
 - Are renders deterministic across machines and are licensed fonts explicit?
 - Do tests cover empty, edge-aligned, panel-edge, grayscale, and failure cases?

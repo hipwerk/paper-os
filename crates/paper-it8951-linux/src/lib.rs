@@ -20,6 +20,12 @@ const WRITE_PREAMBLE: [u8; 2] = [0x00, 0x00];
 const READ_PREAMBLE: [u8; 2] = [0x10, 0x00];
 const WORD_BUFFER_LEN: usize = 256;
 
+/// Highest SPI rate audited in Waveshare's Raspberry Pi IT8951 implementation.
+///
+/// Initial bring-up should remain at 1 MHz. Raising the local profile is a
+/// measured lab decision and cannot exceed this vendor-proven ceiling.
+pub const MAX_AUDITED_SPI_HZ: u32 = 12_500_000;
+
 /// SPI operations needed while chip select is controlled separately.
 pub trait SpiBus {
     /// Writes every byte or returns an I/O error.
@@ -314,6 +320,8 @@ struct RawPanelProfile {
     width: u32,
     height: u32,
     vcom_mv: u16,
+    expected_firmware: Option<String>,
+    expected_lut: Option<String>,
     spi_device: PathBuf,
     gpio_chip: PathBuf,
     cs_line: u32,
@@ -338,6 +346,10 @@ pub struct PanelProfile {
     pub panel_size: paper_display::Size,
     /// Exact VCOM magnitude recorded from this panel's FPC.
     pub vcom: VcomMillivolts,
+    /// Exact firmware string pinned after the first successful probe.
+    pub expected_firmware: Option<String>,
+    /// Exact LUT string pinned after the first successful probe.
+    pub expected_lut: Option<String>,
     /// Linux spidev node configured with hardware CS disabled.
     pub spi_device: PathBuf,
     /// Linux GPIO character-device node.
@@ -348,7 +360,7 @@ pub struct PanelProfile {
     pub reset_line: u32,
     /// Active-high HRDY line offset.
     pub ready_line: u32,
-    /// Maximum SPI clock.
+    /// Maximum SPI clock, capped at [`MAX_AUDITED_SPI_HZ`].
     pub max_spi_hz: u32,
     /// Transaction/reset timing.
     pub timing: Timing,
@@ -440,8 +452,32 @@ fn validate_profile(raw: RawPanelProfile) -> Result<PanelProfile, ProfileError> 
     }
     let vcom =
         VcomMillivolts::new(raw.vcom_mv).ok_or_else(|| invalid("vcom_mv must be 1..=5000"))?;
-    if raw.max_spi_hz == 0 {
-        return Err(invalid("max_spi_hz must be non-zero"));
+    if !(1..=MAX_AUDITED_SPI_HZ).contains(&raw.max_spi_hz) {
+        return Err(invalid(
+            "max_spi_hz must be 1..=12500000 (start bring-up at 1000000)",
+        ));
+    }
+    let valid_version = |version: &str| {
+        !version.trim().is_empty()
+            && version.len() <= 16
+            && version.is_ascii()
+            && !version.as_bytes().contains(&0)
+    };
+    if raw
+        .expected_firmware
+        .as_deref()
+        .is_some_and(|version| !valid_version(version))
+    {
+        return Err(invalid(
+            "expected_firmware must be 1..=16 non-blank ASCII bytes",
+        ));
+    }
+    if raw
+        .expected_lut
+        .as_deref()
+        .is_some_and(|version| !valid_version(version))
+    {
+        return Err(invalid("expected_lut must be 1..=16 non-blank ASCII bytes"));
     }
     if raw.cs_line == raw.reset_line
         || raw.cs_line == raw.ready_line
@@ -483,6 +519,8 @@ fn validate_profile(raw: RawPanelProfile) -> Result<PanelProfile, ProfileError> 
         name: raw.name,
         panel_size: paper_display::Size::new(raw.width, raw.height),
         vcom,
+        expected_firmware: raw.expected_firmware,
+        expected_lut: raw.expected_lut,
         spi_device: raw.spi_device,
         gpio_chip: raw.gpio_chip,
         cs_line: raw.cs_line,
@@ -947,6 +985,8 @@ display_poll_ms = 100
         assert_eq!(profile.cs_line, 8);
         assert_eq!(profile.vcom.get(), 1500);
         assert_eq!(profile.panel_size, paper_display::Size::new(1448, 1072));
+        assert_eq!(profile.expected_firmware, None);
+        assert_eq!(profile.expected_lut, None);
     }
 
     #[test]
@@ -981,6 +1021,49 @@ display_poll_ms = 100
         let invalid = valid.replace("vcom_mv = 1500", "vcom_mv = 0");
         assert!(matches!(
             load_panel_profile_from_str(&invalid, "desk"),
+            Err(super::ProfileError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn profile_pins_controller_versions_and_caps_spi_rate() {
+        let source = r#"
+[[panel]]
+name = "desk"
+controller = "it8951"
+width = 1448
+height = 1072
+vcom_mv = 1500
+expected_firmware = "FW6"
+expected_lut = "M641"
+spi_device = "/dev/spidev0.0"
+gpio_chip = "/dev/gpiochip0"
+cs_line = 8
+reset_line = 17
+ready_line = 24
+max_spi_hz = 12500000
+ready_timeout_ms = 1000
+ready_poll_us = 100
+reset_high_ms = 200
+reset_low_ms = 10
+reset_recovery_ms = 200
+display_timeout_ms = 30000
+display_poll_ms = 100
+"#;
+
+        let profile = load_panel_profile_from_str(source, "desk").unwrap();
+        assert_eq!(profile.expected_firmware.as_deref(), Some("FW6"));
+        assert_eq!(profile.expected_lut.as_deref(), Some("M641"));
+
+        let too_fast = source.replace("max_spi_hz = 12500000", "max_spi_hz = 12500001");
+        assert!(matches!(
+            load_panel_profile_from_str(&too_fast, "desk"),
+            Err(super::ProfileError::Invalid { .. })
+        ));
+
+        let blank_identity = source.replace("expected_lut = \"M641\"", "expected_lut = \" \"");
+        assert!(matches!(
+            load_panel_profile_from_str(&blank_identity, "desk"),
             Err(super::ProfileError::Invalid { .. })
         ));
     }

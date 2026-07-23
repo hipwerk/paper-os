@@ -88,7 +88,9 @@ not executable `DisplayCapabilities`. Direct Gray8 is deliberately not
 advertised because the controller cannot bulk-write it; canonical Gray8 will be
 converted to a measured packed format at the display boundary. Packed display
 bytes are MSB-pixel-first with byte-aligned rows and white low-order padding
-bits. Refresh uses the explicit buffer-address command.
+bits. IT8951 packed writes instead number the first Gray4 pixel from the low
+nibble of a controller word, so its adapter performs the nibble-order conversion
+exactly once during upload. Refresh uses the explicit buffer-address command.
 
 ### paper-it8951-linux
 
@@ -97,7 +99,10 @@ v2 requests, manual CS, reset timing, and bounded HRDY polling. spidev runs in
 mode 0 with `SPI_NO_CS`; GPIO owns CS because the IT8951 requires HRDY
 synchronization while CS remains asserted after the transaction preamble.
 Display polling establishes one monotonic deadline shared by every nested HRDY
-wait. Applications and portable controller code do not depend on this crate.
+wait. Named profiles cap SPI at the 12.5 MHz rate audited in Waveshare's current
+Raspberry Pi implementation; bring-up starts at 1 MHz. Firmware and LUT strings
+may be learned by probe, but both must be pinned before any refresh.
+Applications and portable controller code do not depend on this crate.
 
 ### paper-runtime
 

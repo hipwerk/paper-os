@@ -42,10 +42,12 @@ ellipsizing.
 The IT8951 protocol fake records commands, single and bulk words, reads, delays,
 and reset. It verifies probe non-mutation, literal firmware/LUT classification,
 VCOM readback, mismatch failure, packed Gray4 upload, explicit-buffer refresh,
+PaperOS-to-controller Gray4 nibble conversion, plausible image-buffer addresses,
 deep-sleep reprobe, and display deadline. The Linux host fake verifies preamble
 byte order, dummy reads, manual-CS lifetime across HRDY synchronization, bulk
-transfer, shared-deadline expiry, dual transaction/CS-release failure reporting,
-and stuck HRDY timeout. Short system calls are handled by
+transfer, SPI/profile safety bounds, pinned identity, shared-deadline expiry,
+dual transaction/CS-release failure reporting, and stuck HRDY timeout. Short
+system calls are handled by
 `write_all`/`read_exact`; logic-analyzer evidence belongs in the physical lab
 report.
 

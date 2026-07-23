@@ -50,6 +50,9 @@ include `cs_line` in the named panel profile.
   four-byte (32-pixel) alignment.
 - Pixel buffers support 1/2/4/8-bpp; endian/packing is part of the controller
   adapter, not application rendering.
+- PaperOS Gray4 bytes put the left pixel in the high nibble. IT8951 packed-write
+  words put the first pixel in the low nibble, so the backend reverses the four
+  nibbles of each uploaded word. Protocol vectors test `01 23` → `3210`.
 - The implemented physical backend is deliberately full-screen only: packed
   Gray4 INIT/GC16. Direct Gray8, partial, and A2 profiles are not advertised.
 - HRDY and display-engine polling share the wall-clock deadline from the named
@@ -69,6 +72,8 @@ Git) and fill it from the physical unit. Give each panel a stable local name.
 Never select the first detected device when a test can alter VCOM or refresh.
 Verify the SPI node, GPIO chip, CS/reset/ready offsets, timing budgets, native
 dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
+Start `max_spi_hz` at 1 MHz. Profiles reject values above 12.5 MHz, the rate
+audited in Waveshare's Raspberry Pi implementation.
 
 ## Bring-up sequence
 
@@ -89,8 +94,11 @@ dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
 
    It resets, wakes, reads identity and VCOM, never writes VCOM, verifies the
    named profile, and sleeps. Compare panel size, memory address, firmware, LUT,
-   and current VCOM to the baseline.
-5. With separate authorization, run:
+   and current VCOM to the baseline. Copy the exact printed firmware and LUT
+   strings into `expected_firmware` and `expected_lut` in the local profile,
+   then run probe again. Probe permits absent identity fields for this discovery
+   step but rejects any configured mismatch.
+5. Only after the second probe succeeds, and with separate authorization, run:
 
    ```sh
    paperos-hardware calibrate \
@@ -100,10 +108,13 @@ dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
      --allow-refresh
    ```
 
-   It runs white INIT and a packed Gray4 GC16 calibration page, sleeps during
-   the bounded observation interval, then resets/reprobes/revalidates identity
-   and VCOM before white INIT cleanup and sleep. `SIGINT` or `SIGTERM` requests
-   graceful sleep rather than terminating immediately.
+   It refuses to start unless firmware and LUT are pinned, then runs white INIT
+   and a packed Gray4 GC16 calibration page with an order-sensitive `0/5/10/15`
+   stripe, sleeps during the bounded observation interval, and
+   resets/reprobes/revalidates full identity and VCOM before white INIT cleanup
+   and sleep. `SIGHUP`, `SIGINT`, or `SIGTERM` requests graceful sleep rather
+   than terminating immediately; scope cleanup also makes a best-effort sleep
+   request on unexpected early returns.
 6. Add partial and A2 experiments only after the full path is stable.
 
 Do not start with a complex Daily page: calibration bars, one-pixel borders,

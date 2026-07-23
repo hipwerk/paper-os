@@ -24,7 +24,9 @@ documented, and demonstrated at its lowest real boundary.
 - Implemented: ready/reset timing and a shared HRDY/display deadline
 - Implemented: named-profile probe reporting size, memory, firmware, LUT, VCOM
 - Implemented: packed-Gray4 full upload and explicit-buffer INIT/GC16 refresh
-- Implemented: white INIT, sleeping observation, reinitialized cleanup, signals
+- Implemented: verified Gray4 boundary packing and diagnostic packing stripe
+- Implemented: pinned refresh identity, bounded SPI profile, address validation
+- Implemented: white INIT, sleeping observation, reinitialized guarded cleanup
 - Implemented: protocol and host fake-transport tests
 - Remaining: lab report from the named 6-inch HD panel
 

@@ -55,7 +55,8 @@ touch the panel.
 5. Install `deploy/99-paperos.rules` only after reviewing device ownership.
 6. Keep physical panel settings, including exact VCOM, in the named
    `hardware/panels.local.toml` profile. It is the sole diagnostic hardware
-   configuration authority.
+   configuration authority. Keep SPI at 1 MHz for initial bring-up; validation
+   caps it at the audited Waveshare rate of 12.5 MHz.
 7. Install the eventual daemon under `/opt/paperos/bin/` and writable state under
    `/var/lib/paperos/`.
 
@@ -80,12 +81,16 @@ cargo run --release -p paperos-hardware -- \
 ```
 
 `probe` resets, wakes, reads identity and VCOM, verifies them against the named
-profile, and sleeps. `calibrate` additionally performs white INIT, a packed
-Gray4 GC16 test page, sleeps the controller during the bounded observation
-interval, resets/reprobes/revalidates identity and VCOM, performs white INIT
-cleanup, and sleeps again. `SIGINT`/`SIGTERM` request graceful sleep; an
-interruption while already sleeping leaves the diagnostic page visible. Neither
-command writes VCOM. Any profile/probe mismatch aborts before a refresh.
+profile, and sleeps. The first probe may omit `expected_firmware` and
+`expected_lut`; copy its exact output into those local fields and repeat probe
+before calibration. `calibrate` refuses unpinned identity, then performs white
+INIT, a packed Gray4 GC16 test page with an order-sensitive packing stripe,
+sleeps the controller during the bounded observation interval,
+resets/reprobes/revalidates identity and VCOM, performs white INIT cleanup, and
+sleeps again. `SIGHUP`/`SIGINT`/`SIGTERM` request graceful sleep, and an armed
+scope guard attempts sleep on unexpected early return. An interruption while
+already sleeping leaves the diagnostic page visible. Neither command writes
+VCOM. Any profile/probe mismatch aborts before a refresh.
 
 ## Service design
 

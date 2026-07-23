@@ -25,12 +25,15 @@ Physical commands must not guess a panel, VCOM, or unbounded wait policy.
 - The first physical backend advertises full packed-Gray4 INIT/GC16 only and
   refreshes through the explicit buffer-address command. Direct Gray8 remains
   unadvertised until a measured conversion/cost policy exists. Packed formats
-  use MSB-pixel-first bytes, byte-aligned rows, and white unused low bits.
+  use MSB-pixel-first bytes, byte-aligned rows, and white unused low bits. The
+  backend converts Gray4 to the controller's first-pixel-in-low-nibble order.
 - A dedicated diagnostic requires an exact named local profile and
   `--allow-hardware`; visible refresh additionally requires `--allow-refresh`.
-  Probe and calibration never write VCOM. Calibration sleeps during its bounded
-  observation interval, reinitializes before cleanup, and handles termination
-  signals as graceful sleep requests.
+  Probe and calibration never write VCOM. Probe discovers firmware/LUT;
+  calibration requires both strings to be pinned exactly. SPI is capped at the
+  12.5 MHz rate audited in Waveshare's Pi implementation. Calibration sleeps
+  during its bounded observation interval, reinitializes before cleanup, and
+  handles hangup/termination signals plus scope exit as sleep requests.
 - Deployment executes both binaries in hardware-free modes before atomically
   activating one release directory.
 
