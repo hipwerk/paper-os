@@ -13,7 +13,7 @@ This is the lowest-friction bring-up path and avoids cross-linker surprises:
 ```sh
 rsync -az --delete --exclude target ./ "$PAPEROS_PI_USER@$PAPEROS_PI_HOST:~/paper-os/"
 ssh "$PAPEROS_PI_USER@$PAPEROS_PI_HOST" \
-  'cd ~/paper-os && cargo build --release -p daily'
+  'cd ~/paper-os && cargo build --release -p daily -p paperos-hardware'
 ```
 
 The first build is slower; incremental builds are appropriate during driver
@@ -25,35 +25,67 @@ Install Zig and cargo-zigbuild, then use the repository script:
 
 ```sh
 brew install zig                  # macOS example
-cargo install --locked cargo-zigbuild
+just bootstrap-deploy
 export PAPEROS_PI_HOST=paperos.local
 export PAPEROS_PI_USER=<ssh-user>
 ./scripts/deploy-pi
 ```
 
 `cargo-zigbuild` supplies the Linux linker/sysroot that `rustup target add`
-alone does not provide. The deployment script obtains a remote `mktemp` path,
-installs a content-addressed binary under `/opt/paperos/releases/`, and
-atomically replaces `/opt/paperos/bin/daily` with a relative symlink. It
-currently deploys the simulator Daily binary for architecture smoke testing; it
-does not touch a panel.
+alone does not provide. The deployment script builds `daily` and
+`paperos-hardware`, copies them to remote `mktemp` paths, executes the hardware
+diagnostic's device-free `self-test`, runs Daily to a temporary PGM, and checks
+that artifact before installation. It installs both under one
+content-addressed `/opt/paperos/releases/<id>/` directory and atomically moves
+`/opt/paperos/current`. Deployment and smoke testing do not open SPI/GPIO or
+touch the panel.
 
 ## Pi host preparation
 
-1. Enable SPI with `raspi-config`, reboot, and verify `/dev/spidev0.0`.
-2. Confirm the GPIO chip and line names with `gpioinfo`; never assume a Pi model
+1. Enable SPI with `raspi-config`.
+2. Configure SPI without native chip select by adding
+   `dtoverlay=spi0-0cs` to `/boot/firmware/config.txt` on current Raspberry Pi
+   OS (or the boot config path reported by that OS), then reboot. PaperOS uses
+   `SPI_NO_CS` and drives BCM 8 through GPIO so CS can remain asserted while
+   HRDY is sampled. Verify `/dev/spidev0.0` after reboot.
+3. Confirm the GPIO chip and line names with `gpioinfo`; never assume a Pi model
    maps chips identically.
-3. Create a non-login `paperos` service account and groups permitted to access
+4. Create a non-login `paperos` service account and groups permitted to access
    only required devices.
-4. Install `deploy/99-paperos.rules` only after reviewing device ownership.
-5. Create `/etc/paperos/paperos.env` mode `0640`, owned by root and the service
-   group. Copy values from `.env.example`, including the exact panel VCOM.
-6. Install the eventual daemon under `/opt/paperos/bin/` and writable state under
+5. Install `deploy/99-paperos.rules` only after reviewing device ownership.
+6. Keep physical panel settings, including exact VCOM, in the named
+   `hardware/panels.local.toml` profile. It is the sole diagnostic hardware
+   configuration authority.
+7. Install the eventual daemon under `/opt/paperos/bin/` and writable state under
    `/var/lib/paperos/`.
 
 Direct peripheral register manipulation is not planned. Linux adapters use
 `spidev` and the GPIO character-device v2 API. This works across Pi generations
 more cleanly and keeps privileges contained.
+
+## Explicit hardware diagnostics
+
+The deploy script never invokes these commands. From the repository on the Pi,
+copy and complete `hardware/panels.local.toml`, then run the ladder only with
+operator authorization:
+
+```sh
+cargo run --release -p paperos-hardware -- \
+  probe --config hardware/panels.local.toml --profile desk-6in-hd \
+  --allow-hardware
+
+cargo run --release -p paperos-hardware -- \
+  calibrate --config hardware/panels.local.toml --profile desk-6in-hd \
+  --allow-hardware --allow-refresh
+```
+
+`probe` resets, wakes, reads identity and VCOM, verifies them against the named
+profile, and sleeps. `calibrate` additionally performs white INIT, a packed
+Gray4 GC16 test page, sleeps the controller during the bounded observation
+interval, resets/reprobes/revalidates identity and VCOM, performs white INIT
+cleanup, and sleeps again. `SIGINT`/`SIGTERM` request graceful sleep; an
+interruption while already sleeping leaves the diagnostic page visible. Neither
+command writes VCOM. Any profile/probe mismatch aborts before a refresh.
 
 ## Service design
 
@@ -74,7 +106,7 @@ restart-prone deployment.
 
 ## Releases and rollback
 
-Build versioned binaries, upload beside the current release, run `--self-test`
+Build versioned binaries, upload beside the current release, run `self-test`
 without refreshing hardware, then atomically switch a symlink and restart.
 Retain the previous binary and config schema for rollback. Never make schema
 migration and panel firmware behavior inseparable.

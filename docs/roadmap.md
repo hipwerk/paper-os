@@ -18,18 +18,20 @@ documented, and demonstrated at its lowest real boundary.
 - Unit/property tests, CI, dependency policy, agent guidance
 - Pi deployment and Waveshare lab plan
 
-## Slice 1: pixels on glass — next
+## Slice 1: pixels on glass — implementation complete, lab evidence pending
 
-- Linux host adapter using `/dev/spidev*` and GPIO character-device ABI v2
-- IT8951 transaction framing with ready/reset timing and timeouts
-- Device probe that records panel size, memory address, firmware, and LUT
-- Gray8/4-bpp full upload and GC16 refresh
-- Explicit white INIT cleanup and sleep
-- Simulator and fake-transport parity tests
-- Lab report from the named 6-inch HD panel
+- Implemented: Linux `/dev/spidev*` plus GPIO-v2 manual-CS host adapter
+- Implemented: ready/reset timing and a shared HRDY/display deadline
+- Implemented: named-profile probe reporting size, memory, firmware, LUT, VCOM
+- Implemented: packed-Gray4 full upload and explicit-buffer INIT/GC16 refresh
+- Implemented: white INIT, sleeping observation, reinitialized cleanup, signals
+- Implemented: protocol and host fake-transport tests
+- Remaining: lab report from the named 6-inch HD panel
 
 Exit gate: a generated calibration page reaches the physical panel without the
 Waveshare C demo, VCOM is verified, and failures time out safely.
+
+The exit gate is not met until the physical result is observed and recorded.
 
 ## Slice 2: typography and preview
 
@@ -54,7 +56,7 @@ Exit gate: Daily renders the same accepted page in simulator and hardware.
 
 ## Slice 4: deliberate refresh
 
-- format packing for 1/2/4/8-bpp with endian tests
+- remaining 1/2-bpp packing and Gray8-to-packed conversion/dithering
 - mode-specific legal update regions, including the M641 32-pixel rule
 - partial GC16 and A2 updates
 - update history persisted across daemon restarts

@@ -1,0 +1,21 @@
+[package]
+name = "paperos-hardware"
+description = "Explicit PaperOS hardware bring-up diagnostic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap.workspace = true
+paper-display.workspace = true
+paper-it8951.workspace = true
+paper-it8951-linux.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+signal-hook.workspace = true
+
+[lints]
+workspace = true

@@ -124,6 +124,11 @@ impl Rect {
 }
 
 /// Pixel encodings accepted at the display boundary.
+///
+/// Packed formats place the leftmost pixel in the most-significant bits of its
+/// byte. Rows start on a byte boundary and any unused low-order bits in the last
+/// byte must be set to one (white). `Gray2` and `Gray4` values increase from
+/// black (`0`) to white (all bits set).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PixelFormat {
     /// One packed bit per pixel.
@@ -145,6 +150,17 @@ impl PixelFormat {
             Self::Gray4 => 4,
             Self::Gray8 => 8,
         }
+    }
+
+    /// Returns the minimum bytes required for one row of `width` pixels.
+    pub const fn row_bytes(self, width: u32) -> Option<usize> {
+        let Some(bits) = width.checked_mul(self.bits_per_pixel() as u32) else {
+            return None;
+        };
+        let Some(rounded) = bits.checked_add(7) else {
+            return None;
+        };
+        Some((rounded / 8) as usize)
     }
 }
 
@@ -440,5 +456,14 @@ mod tests {
                 .profile(PixelFormat::Gray8, Waveform::FastMonochrome)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn packed_row_size_rounds_to_complete_bytes() {
+        assert_eq!(PixelFormat::Monochrome1.row_bytes(9), Some(2));
+        assert_eq!(PixelFormat::Gray2.row_bytes(5), Some(2));
+        assert_eq!(PixelFormat::Gray4.row_bytes(3), Some(2));
+        assert_eq!(PixelFormat::Gray8.row_bytes(3), Some(3));
+        assert_eq!(PixelFormat::Gray8.row_bytes(u32::MAX), None);
     }
 }

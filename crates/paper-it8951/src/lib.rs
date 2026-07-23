@@ -2,24 +2,36 @@
 //!
 //! Linux SPI/GPIO framing belongs in a [`Transport`] implementation. This crate
 //! owns controller commands, probed identity, VCOM typing, and verified LUT
-//! capability mapping.
+//! metadata.
 
 #![no_std]
 
 use core::fmt;
 
 use paper_display::{
-    DisplayCapabilities, PixelFormat, Size, UpdateConstraints, UpdateProfile, Waveform,
+    Display, DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateProfile,
+    UpdateRequest, Waveform,
 };
 
 const COMMAND_SYSTEM_RUN: u16 = 0x0001;
 const COMMAND_STANDBY: u16 = 0x0002;
 const COMMAND_SLEEP: u16 = 0x0003;
+const COMMAND_REGISTER_READ: u16 = 0x0010;
+const COMMAND_REGISTER_WRITE: u16 = 0x0011;
+const COMMAND_LOAD_IMAGE_AREA: u16 = 0x0021;
+const COMMAND_LOAD_IMAGE_END: u16 = 0x0022;
+const COMMAND_DISPLAY_BUFFER_AREA: u16 = 0x0037;
 const COMMAND_GET_DEVICE_INFO: u16 = 0x0302;
 const COMMAND_VCOM: u16 = 0x0039;
 const DEVICE_INFO_WORDS: usize = 20;
+const REGISTER_PACKED_WRITE: u16 = 0x0004;
+const REGISTER_IMAGE_ADDRESS: u16 = 0x0208;
+const REGISTER_DISPLAY_STATUS: u16 = 0x1224;
+const PIXEL_FORMAT_GRAY4: u16 = 2;
+const MODE_INITIALIZE: u16 = 0;
+const MODE_GRAYSCALE: u16 = 2;
 
-const QUALITY_PROFILES: &[UpdateProfile] = &[
+const IMPLEMENTED_FULL_PROFILES: &[UpdateProfile] = &[
     UpdateProfile::new(
         PixelFormat::Gray4,
         Waveform::Initialize,
@@ -27,56 +39,33 @@ const QUALITY_PROFILES: &[UpdateProfile] = &[
         UpdateConstraints::UNRESTRICTED,
     ),
     UpdateProfile::new(
-        PixelFormat::Gray8,
-        Waveform::Grayscale,
-        true,
-        UpdateConstraints::UNRESTRICTED,
-    ),
-    UpdateProfile::new(
         PixelFormat::Gray4,
         Waveform::Grayscale,
-        true,
-        UpdateConstraints::UNRESTRICTED,
-    ),
-    UpdateProfile::new(
-        PixelFormat::Gray2,
-        Waveform::Grayscale,
-        true,
-        UpdateConstraints::UNRESTRICTED,
-    ),
-    UpdateProfile::new(
-        PixelFormat::Monochrome1,
-        Waveform::Grayscale,
-        true,
+        false,
         UpdateConstraints::UNRESTRICTED,
     ),
 ];
-const FAST_ALIGNED_PROFILES: &[UpdateProfile] = &[
-    QUALITY_PROFILES[0],
-    QUALITY_PROFILES[1],
-    QUALITY_PROFILES[2],
-    QUALITY_PROFILES[3],
-    QUALITY_PROFILES[4],
-    UpdateProfile::new(
-        PixelFormat::Monochrome1,
-        Waveform::FastMonochrome,
-        true,
-        UpdateConstraints::new(32, 1, 32, 1).expect("IT8951 fast-profile alignments are non-zero"),
-    ),
-];
-const FAST_UNRESTRICTED_PROFILES: &[UpdateProfile] = &[
-    QUALITY_PROFILES[0],
-    QUALITY_PROFILES[1],
-    QUALITY_PROFILES[2],
-    QUALITY_PROFILES[3],
-    QUALITY_PROFILES[4],
-    UpdateProfile::new(
-        PixelFormat::Monochrome1,
-        Waveform::FastMonochrome,
-        true,
-        UpdateConstraints::UNRESTRICTED,
-    ),
-];
+
+/// Bounded polling policy for the IT8951 display engine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisplayWait {
+    timeout_ms: u32,
+    poll_delay_ms: u32,
+}
+
+impl DisplayWait {
+    /// Creates a non-zero wall-clock timeout and polling interval.
+    pub const fn new(timeout_ms: u32, poll_delay_ms: u32) -> Option<Self> {
+        if timeout_ms == 0 || poll_delay_ms == 0 || poll_delay_ms > timeout_ms {
+            None
+        } else {
+            Some(Self {
+                timeout_ms,
+                poll_delay_ms,
+            })
+        }
+    }
+}
 
 /// The positive magnitude of the negative panel VCOM printed on its FPC.
 ///
@@ -182,19 +171,19 @@ impl DeviceInfo {
         }
     }
 
-    /// Builds conservative display capabilities from the probed LUT.
-    pub fn capabilities(self) -> DisplayCapabilities {
+    /// Returns controller alignment metadata for an allowlisted fast mode.
+    ///
+    /// This describes a controller fact, not an operation implemented by a
+    /// concrete [`Display`] backend.
+    pub fn fast_monochrome_constraints(self) -> Option<UpdateConstraints> {
         let family = self.lut_family();
-        DisplayCapabilities {
-            native_size: self.panel_size,
-            update_profiles: if family.requires_four_byte_alignment() {
-                FAST_ALIGNED_PROFILES
-            } else if family.fast_monochrome_mode().is_some() {
-                FAST_UNRESTRICTED_PROFILES
-            } else {
-                QUALITY_PROFILES
-            },
-        }
+        family.fast_monochrome_mode()?;
+        Some(if family.requires_four_byte_alignment() {
+            UpdateConstraints::new(32, 1, 32, 1)
+                .expect("IT8951 fast-profile alignments are non-zero")
+        } else {
+            UpdateConstraints::UNRESTRICTED
+        })
     }
 
     /// Returns the allowlisted controller A2 mode, if known.
@@ -242,8 +231,15 @@ pub trait Transport {
     /// Sends one host-order command word.
     fn command(&mut self, command: u16) -> Result<(), Self::Error>;
 
-    /// Sends one host-order data word.
-    fn write_word(&mut self, word: u16) -> Result<(), Self::Error>;
+    /// Sends host-order data words in one chip-select transaction.
+    fn write_words<I>(&mut self, words: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = u16>;
+
+    /// Sends one host-order data word in one transaction.
+    fn write_word(&mut self, word: u16) -> Result<(), Self::Error> {
+        self.write_words(core::iter::once(word))
+    }
 
     /// Reads controller words into host-order `u16` values.
     ///
@@ -252,6 +248,48 @@ pub trait Transport {
     /// version strings are then decoded from the little-endian in-memory word
     /// representation mandated by the controller's device-info structure.
     fn read_words(&mut self, words: &mut [u16]) -> Result<(), Self::Error>;
+
+    /// Delays portable controller polling without assuming an operating system.
+    fn delay_ms(&mut self, milliseconds: u32);
+
+    /// Starts a shared monotonic deadline for one controller operation.
+    fn begin_operation(&mut self, timeout_ms: u32);
+
+    /// Returns whether the active operation deadline has expired.
+    fn operation_timed_out(&self) -> bool;
+
+    /// Clears the active operation deadline.
+    fn end_operation(&mut self);
+}
+
+/// Invalid update rejected before a physical refresh command is issued.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UpdateError {
+    /// Only a complete native panel update is implemented.
+    FullScreenOnly,
+    /// The backend does not implement the requested format/waveform pair.
+    UnsupportedProfile,
+    /// The requested geometry cannot be represented by IT8951 command words.
+    GeometryTooLarge,
+    /// The source stride is shorter than one encoded row.
+    ShortStride,
+    /// The source slice does not contain every requested row.
+    ShortBuffer,
+    /// IT8951 word uploads require an even encoded byte count per row.
+    OddRowBytes,
+}
+
+impl fmt::Display for UpdateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FullScreenOnly => "only full-screen updates are implemented",
+            Self::UnsupportedProfile => "unsupported IT8951 format/waveform profile",
+            Self::GeometryTooLarge => "update geometry exceeds IT8951 command fields",
+            Self::ShortStride => "update stride is shorter than one encoded row",
+            Self::ShortBuffer => "update pixel buffer does not contain every source row",
+            Self::OddRowBytes => "encoded IT8951 rows must contain an even number of bytes",
+        })
+    }
 }
 
 /// IT8951 control failure.
@@ -263,6 +301,17 @@ pub enum Error<E> {
     InvalidDeviceInfo,
     /// The controller returned a zero or implausible VCOM magnitude.
     InvalidVcomResponse,
+    /// The display engine remained busy for the complete configured budget.
+    DisplayTimeout,
+    /// Reinitialization found a different controller or panel.
+    DeviceChanged {
+        /// Identity used to construct the backend.
+        expected: DeviceInfo,
+        /// Identity observed after reset.
+        observed: DeviceInfo,
+    },
+    /// The update was rejected before upload or refresh.
+    InvalidUpdate(UpdateError),
     /// A VCOM write completed at the transport layer but did not persist.
     VcomMismatch {
         /// Requested positive magnitude.
@@ -278,6 +327,11 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             Self::Transport(error) => write!(formatter, "IT8951 transport error: {error}"),
             Self::InvalidDeviceInfo => formatter.write_str("IT8951 returned an invalid panel size"),
             Self::InvalidVcomResponse => formatter.write_str("IT8951 returned an invalid VCOM"),
+            Self::DisplayTimeout => formatter.write_str("IT8951 display engine timed out"),
+            Self::DeviceChanged { .. } => {
+                formatter.write_str("IT8951 identity changed while reinitializing after sleep")
+            }
+            Self::InvalidUpdate(error) => write!(formatter, "invalid IT8951 update: {error}"),
             Self::VcomMismatch {
                 requested,
                 observed,
@@ -287,6 +341,23 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
                 requested.get(),
                 observed.get()
             ),
+        }
+    }
+}
+
+impl<E> core::error::Error for Error<E>
+where
+    E: core::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Transport(error) => Some(error),
+            Self::InvalidDeviceInfo
+            | Self::InvalidVcomResponse
+            | Self::DisplayTimeout
+            | Self::DeviceChanged { .. }
+            | Self::InvalidUpdate(_)
+            | Self::VcomMismatch { .. } => None,
         }
     }
 }
@@ -364,7 +435,10 @@ impl<T: Transport> Controller<T> {
         Ok(())
     }
 
-    /// Puts the controller in system-run state.
+    /// Puts a reset or standby controller in system-run state.
+    ///
+    /// Deep sleep requires reset and reprobe; [`It8951Display::wake`] performs
+    /// that complete lifecycle.
     pub fn wake(&mut self) -> Result<(), Error<T::Error>> {
         self.transport
             .command(COMMAND_SYSTEM_RUN)
@@ -385,9 +459,251 @@ impl<T: Transport> Controller<T> {
             .map_err(Error::Transport)
     }
 
+    fn write_register(&mut self, address: u16, value: u16) -> Result<(), Error<T::Error>> {
+        self.transport
+            .command(COMMAND_REGISTER_WRITE)
+            .map_err(Error::Transport)?;
+        self.transport
+            .write_word(address)
+            .map_err(Error::Transport)?;
+        self.transport.write_word(value).map_err(Error::Transport)
+    }
+
+    fn read_register(&mut self, address: u16) -> Result<u16, Error<T::Error>> {
+        self.transport
+            .command(COMMAND_REGISTER_READ)
+            .map_err(Error::Transport)?;
+        self.transport
+            .write_word(address)
+            .map_err(Error::Transport)?;
+        let mut value = [0];
+        self.transport
+            .read_words(&mut value)
+            .map_err(Error::Transport)?;
+        Ok(value[0])
+    }
+
+    fn wait_for_display(&mut self, wait: DisplayWait) -> Result<(), Error<T::Error>> {
+        self.transport.begin_operation(wait.timeout_ms);
+        let result = (|| {
+            loop {
+                if self.transport.operation_timed_out() {
+                    return Err(Error::DisplayTimeout);
+                }
+                let status = match self.read_register(REGISTER_DISPLAY_STATUS) {
+                    Ok(status) => status,
+                    Err(_) if self.transport.operation_timed_out() => {
+                        return Err(Error::DisplayTimeout);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if status == 0 {
+                    return Ok(());
+                }
+                if self.transport.operation_timed_out() {
+                    return Err(Error::DisplayTimeout);
+                }
+                self.transport.delay_ms(wait.poll_delay_ms);
+            }
+        })();
+        self.transport.end_operation();
+        result
+    }
+
     /// Returns the owned transport.
     pub fn into_transport(self) -> T {
         self.transport
+    }
+}
+
+/// Conservative full-screen IT8951 display backend.
+///
+/// Construction does not touch hardware. Callers first probe and verify the
+/// returned identity and VCOM, then pass the still-awake controller here.
+pub struct It8951Display<T> {
+    controller: Controller<T>,
+    device_info: DeviceInfo,
+    expected_vcom: VcomMillivolts,
+    capabilities: DisplayCapabilities,
+    wait: DisplayWait,
+}
+
+impl<T: Transport> It8951Display<T> {
+    /// Builds a display from an already-probed controller.
+    pub const fn new(controller: Controller<T>, report: ProbeReport, wait: DisplayWait) -> Self {
+        Self {
+            controller,
+            device_info: report.device_info,
+            expected_vcom: report.current_vcom,
+            capabilities: DisplayCapabilities {
+                native_size: report.device_info.panel_size,
+                update_profiles: IMPLEMENTED_FULL_PROFILES,
+            },
+            wait,
+        }
+    }
+
+    /// Returns the owned controller for explicit cleanup or further diagnostics.
+    pub fn into_controller(self) -> Controller<T> {
+        self.controller
+    }
+
+    fn validate(&self, request: &UpdateRequest<'_>) -> Result<usize, UpdateError> {
+        if request.region != Rect::from_size(self.device_info.panel_size) {
+            return Err(UpdateError::FullScreenOnly);
+        }
+        if self
+            .capabilities
+            .profile(request.pixel_format, request.waveform)
+            .is_none()
+        {
+            return Err(UpdateError::UnsupportedProfile);
+        }
+        if request.region.size.width > u32::from(u16::MAX)
+            || request.region.size.height > u32::from(u16::MAX)
+        {
+            return Err(UpdateError::GeometryTooLarge);
+        }
+        let row_bytes = request
+            .pixel_format
+            .row_bytes(request.region.size.width)
+            .ok_or(UpdateError::GeometryTooLarge)?;
+        if row_bytes % 2 != 0 {
+            return Err(UpdateError::OddRowBytes);
+        }
+        if request.stride_bytes < row_bytes {
+            return Err(UpdateError::ShortStride);
+        }
+        let last_row = request
+            .region
+            .size
+            .height
+            .checked_sub(1)
+            .and_then(|rows| usize::try_from(rows).ok())
+            .and_then(|rows| rows.checked_mul(request.stride_bytes))
+            .and_then(|offset| offset.checked_add(row_bytes))
+            .ok_or(UpdateError::GeometryTooLarge)?;
+        if request.pixels.len() < last_row {
+            return Err(UpdateError::ShortBuffer);
+        }
+        Ok(row_bytes)
+    }
+
+    fn update_inner(&mut self, request: UpdateRequest<'_>) -> Result<(), Error<T::Error>> {
+        let row_bytes = self.validate(&request).map_err(Error::InvalidUpdate)?;
+        let width = u16::try_from(request.region.size.width)
+            .map_err(|_| Error::InvalidUpdate(UpdateError::GeometryTooLarge))?;
+        let height = u16::try_from(request.region.size.height)
+            .map_err(|_| Error::InvalidUpdate(UpdateError::GeometryTooLarge))?;
+        let address = self.device_info.image_buffer_address.to_le_bytes();
+        self.controller.wait_for_display(self.wait)?;
+        self.controller.write_register(
+            REGISTER_IMAGE_ADDRESS + 2,
+            u16::from_le_bytes([address[2], address[3]]),
+        )?;
+        self.controller.write_register(
+            REGISTER_IMAGE_ADDRESS,
+            u16::from_le_bytes([address[0], address[1]]),
+        )?;
+
+        let format = match request.pixel_format {
+            PixelFormat::Gray4 => PIXEL_FORMAT_GRAY4,
+            PixelFormat::Gray8 | PixelFormat::Gray2 | PixelFormat::Monochrome1 => {
+                return Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile));
+            }
+        };
+        if request.pixel_format == PixelFormat::Gray4 {
+            self.controller.write_register(REGISTER_PACKED_WRITE, 1)?;
+        }
+        self.controller
+            .transport
+            .command(COMMAND_LOAD_IMAGE_AREA)
+            .map_err(Error::Transport)?;
+        for argument in [format << 4, 0, 0, width, height] {
+            self.controller
+                .transport
+                .write_word(argument)
+                .map_err(Error::Transport)?;
+        }
+
+        let words = (0..request.region.size.height as usize).flat_map(|row| {
+            let start = row * request.stride_bytes;
+            request.pixels[start..start + row_bytes]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        });
+        self.controller
+            .transport
+            .write_words(words)
+            .map_err(Error::Transport)?;
+        self.controller
+            .transport
+            .command(COMMAND_LOAD_IMAGE_END)
+            .map_err(Error::Transport)?;
+
+        let mode = match request.waveform {
+            Waveform::Initialize => MODE_INITIALIZE,
+            Waveform::Grayscale => MODE_GRAYSCALE,
+            Waveform::FastMonochrome => {
+                return Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile));
+            }
+        };
+        self.controller
+            .transport
+            .command(COMMAND_DISPLAY_BUFFER_AREA)
+            .map_err(Error::Transport)?;
+        for argument in [
+            0,
+            0,
+            width,
+            height,
+            mode,
+            u16::from_le_bytes([address[0], address[1]]),
+            u16::from_le_bytes([address[2], address[3]]),
+        ] {
+            self.controller
+                .transport
+                .write_word(argument)
+                .map_err(Error::Transport)?;
+        }
+        self.controller.wait_for_display(self.wait)
+    }
+}
+
+impl<T> Display for It8951Display<T>
+where
+    T: Transport,
+    T::Error: fmt::Debug,
+{
+    type Error = Error<T::Error>;
+
+    fn capabilities(&self) -> &DisplayCapabilities {
+        &self.capabilities
+    }
+
+    fn update(&mut self, request: UpdateRequest<'_>) -> Result<(), Self::Error> {
+        self.update_inner(request)
+    }
+
+    fn sleep(&mut self) -> Result<(), Self::Error> {
+        self.controller.sleep()
+    }
+
+    fn wake(&mut self) -> Result<(), Self::Error> {
+        let report = self.controller.probe()?;
+        if report.device_info != self.device_info {
+            return Err(Error::DeviceChanged {
+                expected: self.device_info,
+                observed: report.device_info,
+            });
+        }
+        if report.current_vcom != self.expected_vcom {
+            return Err(Error::VcomMismatch {
+                requested: self.expected_vcom,
+                observed: report.current_vcom,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -398,17 +714,23 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    use paper_display::{PixelFormat, Size, UpdateConstraints, Waveform};
+    use paper_display::{
+        Display, PixelFormat, Rect, Size, UpdateConstraints, UpdateRequest, Waveform,
+    };
 
     use super::{
-        COMMAND_GET_DEVICE_INFO, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo, Error,
-        LutFamily, Transport, VcomMillivolts,
+        COMMAND_DISPLAY_BUFFER_AREA, COMMAND_GET_DEVICE_INFO, COMMAND_LOAD_IMAGE_AREA,
+        COMMAND_LOAD_IMAGE_END, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo,
+        DisplayWait, Error, It8951Display, LutFamily, ProbeReport, Transport, UpdateError,
+        VcomMillivolts,
     };
 
     #[derive(Default)]
     struct FakeTransport {
         operations: Vec<Operation>,
         reads: Vec<u16>,
+        elapsed_ms: u32,
+        deadline_ms: Option<u32>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -416,6 +738,8 @@ mod tests {
         Reset,
         Command(u16),
         Write(u16),
+        WriteMany(Vec<u16>),
+        Delay(u32),
     }
 
     impl Transport for FakeTransport {
@@ -436,10 +760,40 @@ mod tests {
             Ok(())
         }
 
+        fn write_words<I>(&mut self, words: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = u16>,
+        {
+            self.operations
+                .push(Operation::WriteMany(words.into_iter().collect()));
+            Ok(())
+        }
+
         fn read_words(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
             words.copy_from_slice(&self.reads[..words.len()]);
             self.reads.drain(..words.len());
             Ok(())
+        }
+
+        fn delay_ms(&mut self, milliseconds: u32) {
+            self.operations.push(Operation::Delay(milliseconds));
+            let remaining = self.deadline_ms.map_or(milliseconds, |deadline| {
+                deadline.saturating_sub(self.elapsed_ms)
+            });
+            self.elapsed_ms = self.elapsed_ms.saturating_add(milliseconds.min(remaining));
+        }
+
+        fn begin_operation(&mut self, timeout_ms: u32) {
+            self.deadline_ms = Some(self.elapsed_ms.saturating_add(timeout_ms));
+        }
+
+        fn operation_timed_out(&self) -> bool {
+            self.deadline_ms
+                .is_some_and(|deadline| self.elapsed_ms >= deadline)
+        }
+
+        fn end_operation(&mut self) {
+            self.deadline_ms = None;
         }
     }
 
@@ -463,14 +817,42 @@ mod tests {
         }
     }
 
+    fn probe_report(info: DeviceInfo) -> ProbeReport {
+        ProbeReport {
+            device_info: info,
+            current_vcom: VcomMillivolts::new(1_500).unwrap(),
+        }
+    }
+
+    fn words_for_device_info(info: DeviceInfo) -> Vec<u16> {
+        let address = info.image_buffer_address.to_le_bytes();
+        let mut words = vec![
+            u16::try_from(info.panel_size.width).unwrap(),
+            u16::try_from(info.panel_size.height).unwrap(),
+            u16::from_le_bytes([address[0], address[1]]),
+            u16::from_le_bytes([address[2], address[3]]),
+        ];
+        words.extend(
+            info.firmware_version
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+        );
+        words.extend(
+            info.lut_version
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+        );
+        words
+    }
+
     #[test]
     fn probe_reads_vcom_without_writing_it() {
         let mut reads = vec![1448, 1072, 0x1234, 0x5678, 0x3646, 0, 0, 0, 0, 0, 0, 0];
         reads.extend(words_for_lut(b"M641"));
         reads.push(1_400);
         let transport = FakeTransport {
-            operations: Vec::new(),
             reads,
+            ..FakeTransport::default()
         };
         let mut controller = Controller::new(transport);
 
@@ -508,8 +890,8 @@ mod tests {
     #[test]
     fn setting_vcom_is_a_separate_explicit_operation() {
         let transport = FakeTransport {
-            operations: Vec::new(),
             reads: vec![1_500],
+            ..FakeTransport::default()
         };
         let mut controller = Controller::new(transport);
         controller
@@ -530,8 +912,8 @@ mod tests {
     #[test]
     fn setting_vcom_fails_when_readback_does_not_match() {
         let transport = FakeTransport {
-            operations: Vec::new(),
             reads: vec![1_400],
+            ..FakeTransport::default()
         };
         let mut controller = Controller::new(transport);
         let requested = VcomMillivolts::new(1_500).unwrap();
@@ -555,10 +937,7 @@ mod tests {
             assert_eq!(info.lut_family(), family);
             assert_eq!(info.fast_monochrome_mode(), Some(mode));
             assert_eq!(
-                info.capabilities()
-                    .profile(PixelFormat::Monochrome1, Waveform::FastMonochrome)
-                    .unwrap()
-                    .constraints(),
+                info.fast_monochrome_constraints().unwrap(),
                 UpdateConstraints::new(32, 1, 32, 1).unwrap()
             );
         }
@@ -569,11 +948,7 @@ mod tests {
         let info = device_info(b"FUTURE_UNKNOWN");
         assert_eq!(info.lut_family(), LutFamily::Unknown);
         assert_eq!(info.fast_monochrome_mode(), None);
-        assert!(
-            info.capabilities()
-                .profile(PixelFormat::Monochrome1, Waveform::FastMonochrome)
-                .is_none()
-        );
+        assert_eq!(info.fast_monochrome_constraints(), None);
     }
 
     #[test]
@@ -581,5 +956,205 @@ mod tests {
         assert_eq!(VcomMillivolts::new(0), None);
         assert_eq!(VcomMillivolts::new(5_001), None);
         assert_eq!(VcomMillivolts::new(1_500).unwrap().get(), 1_500);
+    }
+
+    #[test]
+    fn packed_gray4_full_update_uses_one_bulk_transaction() {
+        let info = device_info(b"M641");
+        let pixels = [0x01, 0x23, 0x45, 0x67];
+
+        let small = DeviceInfo {
+            panel_size: Size::new(4, 2),
+            image_buffer_address: 0x1234_5678,
+            ..info
+        };
+        let transport = FakeTransport {
+            reads: vec![0, 0],
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(small),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+        display
+            .update(UpdateRequest {
+                region: Rect::from_size(small.panel_size),
+                pixel_format: PixelFormat::Gray4,
+                stride_bytes: 2,
+                pixels: &pixels,
+                waveform: Waveform::Initialize,
+            })
+            .unwrap();
+        let operations = display.into_controller().into_transport().operations;
+
+        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_AREA)));
+        assert!(operations.contains(&Operation::WriteMany(vec![0x2301, 0x6745])));
+        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_END)));
+        let display_command = operations
+            .iter()
+            .position(|operation| *operation == Operation::Command(COMMAND_DISPLAY_BUFFER_AREA))
+            .unwrap();
+        assert_eq!(operations[display_command + 5], Operation::Write(0));
+        assert_eq!(operations[display_command + 6], Operation::Write(0x5678));
+        assert_eq!(operations[display_command + 7], Operation::Write(0x1234));
+    }
+
+    #[test]
+    fn gray8_is_not_advertised_or_executed_by_the_physical_backend() {
+        let info = DeviceInfo {
+            panel_size: Size::new(4, 1),
+            image_buffer_address: 0x1234_5678,
+            ..device_info(b"M641")
+        };
+        let transport = FakeTransport::default();
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(info),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+
+        assert!(
+            display
+                .capabilities()
+                .profile(PixelFormat::Gray8, Waveform::Grayscale)
+                .is_none()
+        );
+        assert_eq!(
+            display.update(UpdateRequest {
+                region: Rect::from_size(info.panel_size),
+                pixel_format: PixelFormat::Gray8,
+                stride_bytes: 4,
+                pixels: &[0, 64, 128, 255],
+                waveform: Waveform::Grayscale,
+            }),
+            Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile))
+        );
+        assert!(
+            display
+                .into_controller()
+                .into_transport()
+                .operations
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn display_busy_polling_is_bounded() {
+        let info = DeviceInfo {
+            panel_size: Size::new(4, 1),
+            ..device_info(b"M641")
+        };
+        let transport = FakeTransport {
+            reads: vec![1, 1, 1],
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(info),
+            DisplayWait::new(14, 7).unwrap(),
+        );
+
+        assert_eq!(
+            display.update(UpdateRequest {
+                region: Rect::from_size(info.panel_size),
+                pixel_format: PixelFormat::Gray4,
+                stride_bytes: 2,
+                pixels: &[255; 2],
+                waveform: Waveform::Grayscale,
+            }),
+            Err(Error::DisplayTimeout)
+        );
+        assert_eq!(
+            display.into_controller().into_transport().operations,
+            vec![
+                Operation::Command(super::COMMAND_REGISTER_READ),
+                Operation::Write(super::REGISTER_DISPLAY_STATUS),
+                Operation::Delay(7),
+                Operation::Command(super::COMMAND_REGISTER_READ),
+                Operation::Write(super::REGISTER_DISPLAY_STATUS),
+                Operation::Delay(7),
+            ]
+        );
+    }
+
+    #[test]
+    fn wake_resets_reprobes_and_revalidates_identity_and_vcom() {
+        let info = device_info(b"M641");
+        let mut reads = words_for_device_info(info);
+        reads.push(1_500);
+        let transport = FakeTransport {
+            reads,
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(info),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+
+        display.sleep().unwrap();
+        display.wake().unwrap();
+
+        let operations = display.into_controller().into_transport().operations;
+        assert!(operations.contains(&Operation::Reset));
+        assert!(operations.contains(&Operation::Command(COMMAND_GET_DEVICE_INFO)));
+        assert!(operations.contains(&Operation::Command(COMMAND_VCOM)));
+    }
+
+    #[test]
+    fn wake_rejects_changed_vcom_after_reprobe() {
+        let info = device_info(b"M641");
+        let mut reads = words_for_device_info(info);
+        reads.push(1_400);
+        let transport = FakeTransport {
+            reads,
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(info),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+
+        assert_eq!(
+            display.wake(),
+            Err(Error::VcomMismatch {
+                requested: VcomMillivolts::new(1_500).unwrap(),
+                observed: VcomMillivolts::new(1_400).unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn odd_packed_row_is_rejected_before_transport() {
+        let info = DeviceInfo {
+            panel_size: Size::new(2, 1),
+            ..device_info(b"M641")
+        };
+        let transport = FakeTransport::default();
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(info),
+            DisplayWait::new(1, 1).unwrap(),
+        );
+
+        assert_eq!(
+            display.update(UpdateRequest {
+                region: Rect::from_size(info.panel_size),
+                pixel_format: PixelFormat::Gray4,
+                stride_bytes: 1,
+                pixels: &[0xff],
+                waveform: Waveform::Initialize,
+            }),
+            Err(Error::InvalidUpdate(UpdateError::OddRowBytes))
+        );
+        assert!(
+            display
+                .into_controller()
+                .into_transport()
+                .operations
+                .is_empty()
+        );
     }
 }

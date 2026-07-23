@@ -35,6 +35,11 @@ When the HAT is not directly stacked, Waveshare documents:
 Set the HAT DIP switch to SPI before power. Treat this table as a starting
 fixture profile and verify against the board revision and `gpioinfo`.
 
+PaperOS controls CS through GPIO rather than native spidev chip select. The
+IT8951 requires CS to remain low while HRDY is sampled after its SPI preamble.
+Configure `dtoverlay=spi0-0cs`, retain `/dev/spidev0.0` for clock/data, and
+include `cs_line` in the named panel profile.
+
 ## Controller facts represented in code
 
 - INIT/cleanup is mode 0.
@@ -45,6 +50,10 @@ fixture profile and verify against the board revision and `gpioinfo`.
   four-byte (32-pixel) alignment.
 - Pixel buffers support 1/2/4/8-bpp; endian/packing is part of the controller
   adapter, not application rendering.
+- The implemented physical backend is deliberately full-screen only: packed
+  Gray4 INIT/GC16. Direct Gray8, partial, and A2 profiles are not advertised.
+- HRDY and display-engine polling share the wall-clock deadline from the named
+  panel profile.
 - Panel size, image-buffer address, firmware, and LUT are probed rather than
   hard-coded.
 - Explicit VCOM writes are read back and fail on any mismatch.
@@ -58,6 +67,8 @@ bound; the runtime must fall back to grayscale rather than drop changed pixels.
 Copy `hardware/panels.example.toml` to `hardware/panels.local.toml` (ignored by
 Git) and fill it from the physical unit. Give each panel a stable local name.
 Never select the first detected device when a test can alter VCOM or refresh.
+Verify the SPI node, GPIO chip, CS/reset/ready offsets, timing budgets, native
+dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
 
 ## Bring-up sequence
 
@@ -67,10 +78,32 @@ Never select the first detected device when a test can alter VCOM or refresh.
    doubt.
 3. Run the vendor demo once with the exact VCOM. Record its device-info output
    and confirm the panel itself renders correctly.
-4. Run PaperOS probe-only mode. It resets, wakes, reads identity and VCOM, and
-   never writes VCOM. Compare panel size, memory address, firmware, LUT, and
-   current VCOM to the baseline.
-5. Run a white INIT cleanup, then a calibration page using GC16, then sleep.
+4. Run PaperOS probe-only mode:
+
+   ```sh
+   paperos-hardware probe \
+     --config hardware/panels.local.toml \
+     --profile desk-6in-hd \
+     --allow-hardware
+   ```
+
+   It resets, wakes, reads identity and VCOM, never writes VCOM, verifies the
+   named profile, and sleeps. Compare panel size, memory address, firmware, LUT,
+   and current VCOM to the baseline.
+5. With separate authorization, run:
+
+   ```sh
+   paperos-hardware calibrate \
+     --config hardware/panels.local.toml \
+     --profile desk-6in-hd \
+     --allow-hardware \
+     --allow-refresh
+   ```
+
+   It runs white INIT and a packed Gray4 GC16 calibration page, sleeps during
+   the bounded observation interval, then resets/reprobes/revalidates identity
+   and VCOM before white INIT cleanup and sleep. `SIGINT` or `SIGTERM` requests
+   graceful sleep rather than terminating immediately.
 6. Add partial and A2 experiments only after the full path is stable.
 
 Do not start with a complex Daily page: calibration bars, one-pixel borders,
