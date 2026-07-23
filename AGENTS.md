@@ -5,8 +5,9 @@ OS, Linux distribution, web renderer, or Waveshare-only application. Preserve
 application portability and treat typography, deterministic output, and panel
 health as product requirements.
 
-Hardware status: simulator and portable IT8951 control protocol only. No Linux
-display adapter or physical upload path exists yet.
+Hardware status: simulator plus an unverified Linux IT8951 bring-up path for
+probe and full packed-Gray4 refresh. No physical lab result exists yet; direct
+Gray8, partial, and fast refresh remain unavailable.
 
 ## Read only what the task needs
 
@@ -30,6 +31,7 @@ linked document by default.
 - Pi target: `cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu`
 - Portable core: `cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf`
 - Preview: `cargo run -p daily -- artifacts/daily.pgm`
+- Hardware-free diagnostic: `cargo run -p paperos-hardware -- self-test`
 - Full local gate: `just ci` when `just` is installed.
 
 ## Engineering rules
@@ -51,6 +53,11 @@ linked document by default.
   fails closed.
 - Never run physical-panel tests, set VCOM, or refresh hardware without explicit
   user authorization and the matching local panel profile. Never guess VCOM.
+- Linux IT8951 transactions use spidev with hardware CS disabled and a
+  GPIO-v2-controlled CS line. Keep CS asserted across preamble/HRDY/payload and
+  keep every HRDY/display wait under a shared monotonic deadline.
+- IT8951 deep sleep requires reset, reprobe, identity verification, and VCOM
+  verification before another update.
 - Do not commit fonts, photos, books, API keys, `.env` files, panel-local
   profiles, or other assets unless their license and provenance are documented.
 

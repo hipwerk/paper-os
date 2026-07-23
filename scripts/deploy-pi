@@ -6,52 +6,87 @@ set -euo pipefail
 
 paperos_target="${PAPEROS_TARGET:-aarch64-unknown-linux-gnu}"
 paperos_remote="${PAPEROS_PI_USER}@${PAPEROS_PI_HOST}"
-paperos_binary="target/${paperos_target}/release/daily"
-paperos_remote_tmp=""
+paperos_daily_binary="target/${paperos_target}/release/daily"
+paperos_hardware_binary="target/${paperos_target}/release/paperos-hardware"
+paperos_remote_daily_tmp=""
+paperos_remote_hardware_tmp=""
 
-cleanup_remote_tmp() {
-    if [[ -n "${paperos_remote_tmp}" ]]; then
-        ssh "${paperos_remote}" bash -s -- "${paperos_remote_tmp}" <<'REMOTE_CLEANUP' || true
-rm -f -- "$1"
+cleanup_remote_temps() {
+    if [[ -n "${paperos_remote_daily_tmp}" || -n "${paperos_remote_hardware_tmp}" ]]; then
+        ssh "${paperos_remote}" bash -s -- \
+            "${paperos_remote_daily_tmp}" "${paperos_remote_hardware_tmp}" <<'REMOTE_CLEANUP' || true
+for path in "$@"; do
+    if [[ -n "${path}" ]]; then
+        rm -f -- "${path}"
+    fi
+done
 REMOTE_CLEANUP
     fi
 }
 
-trap cleanup_remote_tmp EXIT
+trap cleanup_remote_temps EXIT
 
-if ! cargo zigbuild --version >/dev/null 2>&1; then
+if ! cargo zigbuild --help >/dev/null 2>&1; then
     echo "cargo-zigbuild is required; run: cargo install --locked cargo-zigbuild" >&2
     exit 1
 fi
 
-cargo zigbuild --locked --release --target "${paperos_target}" -p daily
-paperos_release="$(shasum -a 256 "${paperos_binary}" | awk '{print substr($1, 1, 16)}')"
-paperos_remote_tmp_candidate="$(ssh "${paperos_remote}" 'mktemp /tmp/paperos-daily.XXXXXX')"
+cargo zigbuild --locked --release --target "${paperos_target}" -p daily -p paperos-hardware
+paperos_release="$(
+    shasum -a 256 "${paperos_daily_binary}" "${paperos_hardware_binary}" \
+        | shasum -a 256 \
+        | awk '{print substr($1, 1, 16)}'
+)"
+paperos_remote_daily_candidate="$(ssh "${paperos_remote}" 'mktemp /tmp/paperos-daily.XXXXXX')"
+paperos_remote_hardware_candidate="$(
+    ssh "${paperos_remote}" 'mktemp /tmp/paperos-hardware.XXXXXX'
+)"
 
-if [[ ! "${paperos_remote_tmp_candidate}" =~ ^/tmp/paperos-daily\.[[:alnum:]]+$ ]]; then
-    echo "Pi returned an unexpected temporary path: ${paperos_remote_tmp_candidate}" >&2
+if [[ ! "${paperos_remote_daily_candidate}" =~ ^/tmp/paperos-daily\.[[:alnum:]]+$ ]]; then
+    echo "Pi returned an unexpected temporary path: ${paperos_remote_daily_candidate}" >&2
     exit 1
 fi
-paperos_remote_tmp="${paperos_remote_tmp_candidate}"
+if [[ ! "${paperos_remote_hardware_candidate}" =~ ^/tmp/paperos-hardware\.[[:alnum:]]+$ ]]; then
+    echo "Pi returned an unexpected temporary path: ${paperos_remote_hardware_candidate}" >&2
+    exit 1
+fi
+paperos_remote_daily_tmp="${paperos_remote_daily_candidate}"
+paperos_remote_hardware_tmp="${paperos_remote_hardware_candidate}"
 
-scp "${paperos_binary}" "${paperos_remote}:${paperos_remote_tmp}"
-ssh "${paperos_remote}" bash -s -- "${paperos_remote_tmp}" "${paperos_release}" <<'REMOTE'
+scp "${paperos_daily_binary}" "${paperos_remote}:${paperos_remote_daily_tmp}"
+scp "${paperos_hardware_binary}" "${paperos_remote}:${paperos_remote_hardware_tmp}"
+ssh "${paperos_remote}" bash -s -- \
+    "${paperos_remote_daily_tmp}" \
+    "${paperos_remote_hardware_tmp}" \
+    "${paperos_release}" <<'REMOTE'
 set -euo pipefail
 
-remote_tmp="$1"
-release_id="$2"
-release_dir="/opt/paperos/releases"
+daily_tmp="$1"
+hardware_tmp="$2"
+release_id="$3"
+releases_dir="/opt/paperos/releases"
+release_dir="${releases_dir}/${release_id}"
 binary_dir="/opt/paperos/bin"
-release_path="${release_dir}/daily-${release_id}"
-next_link="${binary_dir}/.daily-${release_id}"
+next_current="/opt/paperos/.current-${release_id}"
+smoke_output="/tmp/paperos-daily-smoke-${release_id}.pgm"
 
-sudo install -d -m 0755 "${release_dir}" "${binary_dir}"
-sudo install -m 0755 "${remote_tmp}" "${release_path}"
-sudo ln -sfn "../releases/daily-${release_id}" "${next_link}"
-sudo mv -Tf "${next_link}" "${binary_dir}/daily"
-rm -f -- "${remote_tmp}"
+chmod 0755 "${daily_tmp}" "${hardware_tmp}"
+"${hardware_tmp}" self-test
+"${daily_tmp}" "${smoke_output}"
+test -s "${smoke_output}"
+rm -f -- "${smoke_output}"
+
+sudo install -d -m 0755 "${releases_dir}" "${release_dir}" "${binary_dir}"
+sudo install -m 0755 "${daily_tmp}" "${release_dir}/daily"
+sudo install -m 0755 "${hardware_tmp}" "${release_dir}/paperos-hardware"
+sudo ln -sfn "../current/daily" "${binary_dir}/daily"
+sudo ln -sfn "../current/paperos-hardware" "${binary_dir}/paperos-hardware"
+sudo ln -sfn "releases/${release_id}" "${next_current}"
+sudo mv -Tf "${next_current}" /opt/paperos/current
+rm -f -- "${daily_tmp}" "${hardware_tmp}"
 REMOTE
-paperos_remote_tmp=""
+paperos_remote_daily_tmp=""
+paperos_remote_hardware_tmp=""
 
-echo "Activated /opt/paperos/releases/daily-${paperos_release} on ${PAPEROS_PI_HOST}."
-echo "This is an architecture smoke-test binary; it does not access the panel."
+echo "Activated /opt/paperos/releases/${paperos_release} on ${PAPEROS_PI_HOST}."
+echo "Remote self-tests passed without accessing the panel."

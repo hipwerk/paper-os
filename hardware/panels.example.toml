@@ -11,6 +11,16 @@ vcom_mv = 0 # deliberately invalid until replaced
 
 spi_device = "/dev/spidev0.0"
 gpio_chip = "/dev/gpiochip0"
+cs_line = 8
 reset_line = 17
 ready_line = 24
 max_spi_hz = 1_000_000
+
+# Every wait is bounded. Start conservatively and record any measured changes.
+ready_timeout_ms = 1_000
+ready_poll_us = 100
+reset_high_ms = 200
+reset_low_ms = 10
+reset_recovery_ms = 200
+display_timeout_ms = 30_000
+display_poll_ms = 50

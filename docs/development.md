@@ -48,6 +48,16 @@ cargo nextest run --locked --workspace --all-features
 cargo deny check
 ```
 
+For Raspberry Pi cross-deployment, install Zig and `cargo-zigbuild`:
+
+```sh
+brew install zig                  # macOS example
+just bootstrap-deploy
+```
+
+`bootstrap-deploy` verifies that Zig is on `PATH` and installs the locked Cargo
+subcommand. Native builds on the Pi do not require either tool.
+
 ## Dependency policy
 
 - Prefer mature pure-Rust libraries at well-defined seams.

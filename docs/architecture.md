@@ -15,7 +15,7 @@ paper-runtime ─────────┘
                        ↑
 paper-simulator   paper-it8951
                        ↑
-                 Linux/MCU adapters (next)
+             Linux adapter / future MCU adapters
 ```
 
 Applications and UI never import a controller or host adapter. The IT8951 crate
@@ -68,18 +68,36 @@ names or numeric controller-mode escape hatch. Alignment constraints are
 non-zero validated values; malformed backend data cannot silently become
 unrestricted. A display rejects requests that do not match a profile.
 
-The current alignment model is intentionally minimal and will expand to
-mode-specific addressable bounds during the first real upload implementation.
+The current alignment model is intentionally minimal. It will expand to
+mode-specific addressable bounds before partial/A2 operations are exposed.
 
 ### paper-it8951
 
 Owns protocol commands, device-info parsing, LUT interpretation, VCOM typing,
-sleep/wake, and eventually upload/refresh. It is `no_std` and delegates exact
-SPI/GPIO transactions to a `Transport`.
+deep-sleep reinitialization, bounded display-engine polling, and full packed
+Gray4 upload/refresh. It is `no_std` and delegates exact SPI/GPIO transactions
+to a `Transport`.
 
 It must not own Linux device paths, `spidev`, Raspberry Pi pin numbering, layout,
 or refresh policy. VCOM is a required typed input, is never defaulted, and a
 write succeeds only after matching controller readback.
+
+The first physical `Display` implementation advertises only full-screen packed
+Gray4 INIT/GC16. LUT family, A2 mode, and alignment remain controller metadata,
+not executable `DisplayCapabilities`. Direct Gray8 is deliberately not
+advertised because the controller cannot bulk-write it; canonical Gray8 will be
+converted to a measured packed format at the display boundary. Packed display
+bytes are MSB-pixel-first with byte-aligned rows and white low-order padding
+bits. Refresh uses the explicit buffer-address command.
+
+### paper-it8951-linux
+
+Owns named panel-profile parsing, Linux spidev setup, GPIO character-device ABI
+v2 requests, manual CS, reset timing, and bounded HRDY polling. spidev runs in
+mode 0 with `SPI_NO_CS`; GPIO owns CS because the IT8951 requires HRDY
+synchronization while CS remains asserted after the transaction preamble.
+Display polling establishes one monotonic deadline shared by every nested HRDY
+wait. Applications and portable controller code do not depend on this crate.
 
 ### paper-runtime
 

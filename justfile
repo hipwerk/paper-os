@@ -6,6 +6,10 @@ bootstrap:
     rustup component add clippy llvm-tools-preview rustfmt rust-src
     rustup target add aarch64-unknown-linux-gnu thumbv7em-none-eabihf
 
+bootstrap-deploy:
+    command -v zig
+    cargo zigbuild --help >/dev/null 2>&1 || cargo install --locked cargo-zigbuild
+
 lock:
     cargo metadata --locked --no-deps --format-version 1 > /dev/null
 
@@ -51,6 +55,8 @@ coverage-check:
     cargo llvm-cov --locked -p paper-layout --all-features --summary-only --fail-under-lines 75
     cargo llvm-cov --locked -p paper-runtime --all-features --summary-only --fail-under-lines 75
     cargo llvm-cov --locked -p paper-simulator --all-features --summary-only --fail-under-lines 75
+    cargo llvm-cov --locked -p paper-it8951 --all-features --summary-only --fail-under-lines 75
+    cargo llvm-cov --locked -p paper-it8951-linux --all-features --summary-only --fail-under-lines 75
 
 ci: lock fmt lint test docs deny typos actions shell pi-check core-check coverage-check
 

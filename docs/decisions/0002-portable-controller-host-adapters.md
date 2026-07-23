@@ -12,8 +12,9 @@ crate host-specific and frustrate later hardware.
 ## Decision
 
 `paper-it8951` is `no_std` and depends on a small transaction-oriented
-`Transport`. Linux adapters will use spidev and GPIO character-device ABI v2;
-MCU adapters will use embedded-hal implementations.
+`Transport`. The Linux adapter uses spidev and GPIO character-device ABI v2;
+future MCU adapters will use embedded-hal implementations. ADR 0006 records the
+manual-CS Linux transaction details discovered during bring-up.
 
 ## Consequences
 

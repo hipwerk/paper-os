@@ -19,6 +19,15 @@ maintainability.
 - Does an indeterminate backend result force a full recovery update?
 - Can malformed alignment data weaken an update profile instead of failing?
 - Can a default command touch hardware or change VCOM?
+- Does Linux SPI disable hardware CS and keep manual CS asserted while HRDY is
+  sampled after the preamble?
+- Are HRDY and display-engine waits bounded, and is CS released on every
+  transaction failure?
+- Does a deep-sleep wake reset, reprobe, and revalidate identity plus VCOM?
+- Can interruption leave the controller awake, or can an operator-provided hold
+  duration keep it powered indefinitely?
+- Does a framebuffer upload use a bulk transaction where the controller permits
+  it instead of repeating one preamble per packed word?
 - Does an explicit VCOM write verify controller readback?
 - Are renders deterministic across machines and are licensed fonts explicit?
 - Do tests cover empty, edge-aligned, panel-edge, grayscale, and failure cases?

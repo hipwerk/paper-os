@@ -10,11 +10,12 @@ a hardware backend.
 
 > SwiftUI for E Ink, with the sensibility of designing a printed page.
 
-The repository is at foundation stage. Geometry, grayscale framebuffer drawing,
-bounded layout, a `cosmic-text` shaping/raster boundary, safe refresh planning,
-an IT8951 protocol core, a simulator, and a reference app compile and are tested.
-Scene rasterization and real panel upload are the next vertical slices; the
-current `daily` output is intentionally a placeholder.
+The repository is at foundation/bring-up stage. Geometry, grayscale framebuffer
+drawing, bounded layout, a `cosmic-text` shaping/raster boundary, safe refresh
+planning, an IT8951 protocol core, a Linux manual-CS host adapter, a simulator,
+and a packed-Gray4 bring-up diagnostic compile and are tested. Physical panel
+behavior has not yet been verified; the current `daily` output remains
+intentionally a placeholder.
 
 ## Start here
 
@@ -26,6 +27,7 @@ components, and cross targets automatically:
 rustup show
 cargo test --locked --workspace --all-targets --all-features
 cargo run -p daily -- artifacts/daily.pgm
+cargo run -p paperos-hardware -- self-test
 ```
 
 Hipwerk developers may instead use [asdf](https://asdf-vm.com/) 0.16 or newer.
@@ -48,6 +50,7 @@ sample.
 apps/daily             Reference application
 crates/paper-display   Display capabilities and update contract
 crates/paper-it8951    Portable IT8951 protocol core
+crates/paper-it8951-linux Linux spidev/GPIO-v2 host adapter
 crates/paper-runtime   Diffing and refresh policy
 crates/paper-graphics  Gray8 framebuffer and drawing
 crates/paper-text      Typography API and shaping boundary
@@ -55,6 +58,7 @@ crates/paper-layout    Row/Column layout primitives
 crates/paper-ui        Scene and widget API
 crates/paper-assets    Typed asset metadata
 crates/paper-simulator In-memory display and host preview export
+apps/paperos-hardware  Explicit probe/calibration diagnostic
 ```
 
 Read [the product definition](docs/product.md), [architecture](docs/architecture.md),

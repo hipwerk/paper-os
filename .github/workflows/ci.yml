@@ -111,6 +111,8 @@ jobs:
           cargo llvm-cov --locked -p paper-layout --all-features --summary-only --fail-under-lines 75
           cargo llvm-cov --locked -p paper-runtime --all-features --summary-only --fail-under-lines 75
           cargo llvm-cov --locked -p paper-simulator --all-features --summary-only --fail-under-lines 75
+          cargo llvm-cov --locked -p paper-it8951 --all-features --summary-only --fail-under-lines 75
+          cargo llvm-cov --locked -p paper-it8951-linux --all-features --summary-only --fail-under-lines 75
 
       - name: Check advisories, licenses, bans, and sources
         run: cargo deny check

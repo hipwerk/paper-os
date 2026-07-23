@@ -16,8 +16,9 @@ The full developer and CI gate executes without devices:
 
 CI enforces a 75% workspace line-coverage floor. Coverage is a regression
 signal, not a substitute for assertions or hardware evidence. Layout, runtime,
-and simulator also enforce independent 75% floors so aggregate coverage cannot
-hide a weak risk-critical crate. Run `just coverage` for an HTML report.
+simulator, portable IT8951 protocol, and Linux IT8951 host adapter also enforce
+independent 75% floors so aggregate coverage cannot hide a weak risk-critical
+crate. Run `just coverage` for an HTML report.
 
 Deterministic CI tests are not retried. A transient failure is evidence to
 investigate rather than a passing result.
@@ -38,11 +39,15 @@ ellipsizing.
 
 ## Protocol testing
 
-The IT8951 transport fake records commands, words, reads, and reset. It verifies
-probe non-mutation, literal firmware/LUT classification, VCOM readback, mismatch
-failure, and transport sequencing. Ready timing, timeouts, short transfers, and
-logic-analyzer fixtures belong to the first host transport because the current
-portable seam represents complete synchronized transactions.
+The IT8951 protocol fake records commands, single and bulk words, reads, delays,
+and reset. It verifies probe non-mutation, literal firmware/LUT classification,
+VCOM readback, mismatch failure, packed Gray4 upload, explicit-buffer refresh,
+deep-sleep reprobe, and display deadline. The Linux host fake verifies preamble
+byte order, dummy reads, manual-CS lifetime across HRDY synchronization, bulk
+transfer, shared-deadline expiry, dual transaction/CS-release failure reporting,
+and stuck HRDY timeout. Short system calls are handled by
+`write_all`/`read_exact`; logic-analyzer evidence belongs in the physical lab
+report.
 
 Refresh-runtime tests cover both previous and next pixels across the final
 aligned region, sparse damage with large bounds, unsupported profiles,
@@ -57,7 +62,7 @@ Each step requires the local panel profile and operator authorization:
 
 1. **Baseline:** run the vendor C demo and record panel/controller identity.
 2. **Probe only:** reset, wake, read info and VCOM, then sleep; no VCOM write.
-3. **Safe full update:** white INIT, calibration Gray8/GC16 page, white cleanup.
+3. **Safe full update:** white INIT, packed Gray4/GC16 calibration, white cleanup.
 4. **Partial grayscale:** fixed small regions and edge cases.
 5. **Fast monochrome:** legal aligned regions away from unsupported edge pixels.
 6. **Stress:** repeated patterns with scheduled cleanup and temperature record.
