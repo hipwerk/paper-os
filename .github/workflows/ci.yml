@@ -37,7 +37,7 @@ jobs:
       - name: Install CI tools
         uses: taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd # v2.84.1
         with:
-          tool: cargo-nextest@0.9.140,cargo-deny@0.20.2,cargo-llvm-cov@0.8.7,typos-cli@1.48.0,actionlint@1.7.12
+          tool: cargo-nextest@0.9.140,cargo-deny@0.20.2,cargo-llvm-cov@0.8.7,typos-cli@1.48.0,actionlint
           fallback: none
 
       - name: Check spelling
