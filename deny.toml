@@ -3,6 +3,10 @@ all-features = true
 
 [advisories]
 yanked = "deny"
+# cosmic-text 0.19 -> fontdb 0.23 still uses ttf-parser. This advisory is an
+# unmaintained notice, not a vulnerability; remove the exception when fontdb
+# completes its skrifa migration.
+ignore = ["RUSTSEC-2026-0192"]
 
 [licenses]
 confidence-threshold = 0.93
@@ -20,6 +24,9 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
+# Path-only workspace dependencies have no registry version and cargo-deny
+# classifies them as wildcards. Registry dependencies remain pinned in the root
+# workspace table and Cargo.lock.
 wildcards = "allow"
 
 [sources]

@@ -1,3 +1,5 @@
+//! Controller-agnostic display geometry, capabilities, and update contract.
+
 #![no_std]
 
 use core::fmt::Debug;
@@ -5,19 +7,24 @@ use core::fmt::Debug;
 /// A two-dimensional size in physical pixels.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
+    /// Width in physical pixels.
     pub width: u32,
+    /// Height in physical pixels.
     pub height: u32,
 }
 
 impl Size {
+    /// Creates a physical pixel size.
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
 
+    /// Returns whether either dimension is zero.
     pub const fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
 
+    /// Returns the pixel count when multiplication fits the geometry model.
     pub const fn pixel_count(self) -> Option<usize> {
         match self.width.checked_mul(self.height) {
             Some(value) => Some(value as usize),
@@ -29,11 +36,14 @@ impl Size {
 /// A point in physical pixel coordinates.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Point {
+    /// Horizontal coordinate.
     pub x: u32,
+    /// Vertical coordinate.
     pub y: u32,
 }
 
 impl Point {
+    /// Creates a physical pixel coordinate.
     pub const fn new(x: u32, y: u32) -> Self {
         Self { x, y }
     }
@@ -42,11 +52,14 @@ impl Point {
 /// A half-open rectangle: `[x, x + width) × [y, y + height)`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rect {
+    /// Top-left physical coordinate.
     pub origin: Point,
+    /// Physical dimensions.
     pub size: Size,
 }
 
 impl Rect {
+    /// Creates a physical half-open rectangle.
     pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
         Self {
             origin: Point::new(x, y),
@@ -54,22 +67,27 @@ impl Rect {
         }
     }
 
+    /// Creates a rectangle at the origin with the provided size.
     pub const fn from_size(size: Size) -> Self {
         Self::new(0, 0, size.width, size.height)
     }
 
+    /// Returns whether either dimension is zero.
     pub const fn is_empty(self) -> bool {
         self.size.is_empty()
     }
 
+    /// Returns the exclusive right coordinate, saturating on invalid geometry.
     pub const fn right(self) -> u32 {
         self.origin.x.saturating_add(self.size.width)
     }
 
+    /// Returns the exclusive bottom coordinate, saturating on invalid geometry.
     pub const fn bottom(self) -> u32 {
         self.origin.y.saturating_add(self.size.height)
     }
 
+    /// Returns whether a point falls within this half-open rectangle.
     pub const fn contains(self, point: Point) -> bool {
         point.x >= self.origin.x
             && point.y >= self.origin.y
@@ -77,6 +95,7 @@ impl Rect {
             && point.y < self.bottom()
     }
 
+    /// Returns the non-empty overlap between two rectangles.
     pub fn intersection(self, other: Self) -> Option<Self> {
         let x = self.origin.x.max(other.origin.x);
         let y = self.origin.y.max(other.origin.y);
@@ -87,6 +106,7 @@ impl Rect {
     }
 
     #[must_use]
+    /// Returns the smallest rectangle containing both inputs.
     pub fn union(self, other: Self) -> Self {
         if self.is_empty() {
             return other;
@@ -106,13 +126,18 @@ impl Rect {
 /// Pixel encodings accepted at the display boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PixelFormat {
+    /// One packed bit per pixel.
     Monochrome1,
+    /// Two packed bits per pixel.
     Gray2,
+    /// Four packed bits per pixel.
     Gray4,
+    /// One byte per grayscale pixel.
     Gray8,
 }
 
 impl PixelFormat {
+    /// Returns the packed bit depth.
     pub const fn bits_per_pixel(self) -> u8 {
         match self {
             Self::Monochrome1 => 1,
@@ -139,25 +164,35 @@ pub enum Waveform {
 /// Physical panel rotation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Rotation {
+    /// Native orientation.
     #[default]
     Degrees0,
+    /// Ninety degrees clockwise.
     Degrees90,
+    /// One hundred eighty degrees.
     Degrees180,
+    /// Two hundred seventy degrees clockwise.
     Degrees270,
 }
 
 /// Region restrictions for a format/waveform combination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UpdateConstraints {
+    /// Required alignment for the region's X origin.
     pub x_alignment: u32,
+    /// Required alignment for the region's Y origin.
     pub y_alignment: u32,
+    /// Required alignment for the region width.
     pub width_alignment: u32,
+    /// Required alignment for the region height.
     pub height_alignment: u32,
 }
 
 impl UpdateConstraints {
+    /// Constraints accepting any integer-pixel region.
     pub const UNRESTRICTED: Self = Self::new(1, 1, 1, 1);
 
+    /// Creates alignment constraints. Zero values are treated as one on use.
     pub const fn new(
         x_alignment: u32,
         y_alignment: u32,
@@ -209,20 +244,42 @@ const fn align_up(value: u32, alignment: u32) -> u32 {
 /// Immutable capabilities discovered from a display/controller pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DisplayCapabilities {
+    /// Native addressable panel size.
     pub native_size: Size,
+    /// Pixel encodings the backend can accept after target conversion.
     pub supported_formats: &'static [PixelFormat],
+    /// Semantic waveform intents the backend can map safely.
     pub supported_waveforms: &'static [Waveform],
+    /// Whether bounded updates are supported.
     pub partial_updates: bool,
+    /// Region restrictions for fast one-bit updates.
     pub fast_monochrome_constraints: UpdateConstraints,
+}
+
+impl DisplayCapabilities {
+    /// Returns whether a target pixel format is advertised.
+    pub fn supports_format(&self, format: PixelFormat) -> bool {
+        self.supported_formats.contains(&format)
+    }
+
+    /// Returns whether a semantic waveform is advertised.
+    pub fn supports_waveform(&self, waveform: Waveform) -> bool {
+        self.supported_waveforms.contains(&waveform)
+    }
 }
 
 /// One intentional display update.
 #[derive(Clone, Copy, Debug)]
 pub struct UpdateRequest<'a> {
+    /// Physical target region.
     pub region: Rect,
+    /// Encoding of `pixels`.
     pub pixel_format: PixelFormat,
+    /// Source bytes between successive rows.
     pub stride_bytes: usize,
+    /// Source rows beginning at the request region's top-left pixel.
     pub pixels: &'a [u8],
+    /// Semantic waveform requested for the physical transition.
     pub waveform: Waveform,
 }
 
@@ -231,14 +288,19 @@ pub struct UpdateRequest<'a> {
 /// Implementations own upload, refresh completion, and power-state details.
 /// The runtime owns policy: deciding *when* and *what* to update.
 pub trait Display {
+    /// Backend-specific structured failure.
     type Error: Debug;
 
+    /// Returns immutable, probed backend capabilities.
     fn capabilities(&self) -> &DisplayCapabilities;
 
+    /// Uploads and completes one validated physical refresh.
     fn update(&mut self, request: UpdateRequest<'_>) -> Result<(), Self::Error>;
 
+    /// Puts the controller into its low-power sleep state.
     fn sleep(&mut self) -> Result<(), Self::Error>;
 
+    /// Wakes the controller for subsequent explicit operations.
     fn wake(&mut self) -> Result<(), Self::Error>;
 }
 

@@ -27,10 +27,10 @@ and GPIO implementations satisfy.
 ```text
 Application state + explicit event
               ↓
-         Widget tree
-              ↓ layout + text shaping
+         Widget tree + logical scale
+              ↓ bounded layout
         retained Scene
-              ↓ rasterization
+              ↓ text shaping + rasterization
      canonical Gray8 surface
               ↓ compare previous surface
       semantic RefreshPlan
@@ -48,6 +48,11 @@ The retained `Scene` is an ordered display list, not a general mutable view
 hierarchy. It provides enough structure for inspection, tiled rasterization,
 semantic damage tracking, and deterministic testing without turning PaperOS
 into a conventional event-heavy GUI toolkit.
+
+Application design values are logical units. A rational `ScaleFactor` in the
+render context resolves them deterministically to physical pixels before
+framebuffer drawing. Text shaping receives resolved physical metrics so hinting
+and rasterization happen at the target resolution.
 
 ## Crate contracts
 
@@ -72,9 +77,12 @@ or refresh policy. VCOM is a required typed input and is never defaulted.
 ### paper-runtime
 
 Owns previous-frame history, changed pixels/regions, partial-update aging, and
-semantic refresh plans. It does not know numeric IT8951 mode IDs. The initial
-planner uses one conservative bounding rectangle; future planners may emit
-multiple regions after real-panel measurements justify the complexity.
+semantic refresh plans. Planning is pure: history advances only after the
+backend reports a successful update. Fast monochrome requires binary source and
+destination pixels across the final aligned region plus explicit format and
+waveform capabilities. The initial planner uses one conservative bounding
+rectangle; future planners may emit multiple regions after measurements justify
+the complexity.
 
 ### paper-graphics
 
@@ -85,24 +93,26 @@ observable pixel semantics.
 ### paper-text
 
 Owns font selection, shaping, bidi, wrapping, metrics, truncation, and glyph
-rasterization boundaries. The planned first backend is `cosmic-text`, which
-currently integrates HarfRust shaping, font discovery, layout, and optional
-Swash rasterization. PaperOS will bundle explicitly licensed fonts for
-determinism instead of relying on host font discovery in production.
+rasterization boundaries. The first backend is `cosmic-text` 0.19 with HarfRust
+shaping, font discovery, layout, and Swash rasterization. Its public seam emits
+coverage rectangles, not glyph IDs, so fallback font identity stays with the
+engine that can rasterize it. PaperOS will bundle explicitly licensed fonts for
+deterministic production rendering instead of relying on host discovery.
 
 ### paper-layout
 
-Owns constraints and resolution-independent placement. Layout operates in
-logical values that resolve deterministically to physical pixels. The initial
-allocation-free linear layout supports Row/Column mechanics; Stack, Padding,
-Align, Overlay, and Grid follow.
+Owns validated constraints, logical scaling, and resolution-independent
+placement. The allocation-free `no_std` linear core distributes rounding
+remainders exactly and proportionally shrinks overflow to stay within bounds.
+Stack, Padding, Align, Overlay, and Grid follow.
 
 ### paper-ui
 
-Owns application-facing composition, widgets, themes, and scenes. Themes expose
-semantic tokens. A theme may change typography metrics and spacing, so it is
-not restricted to paint colors, but theme changes remain explicit inputs to
-layout.
+Owns application-facing composition, widgets, themes, and scenes. A widget
+measures within constraints and draws into the final rectangle assigned by its
+parent; hidden mutable layout caches are not part of the contract. Bounded text
+commands retain content, resolved style, ink, line limit, and overflow policy.
+Themes expose semantic tokens and remain explicit layout inputs.
 
 ### paper-assets
 
@@ -117,7 +127,8 @@ an intermediate image file.
 
 ## Portability tiers
 
-- **Core portable:** display contract, IT8951 protocol, geometry, core layout.
+- **Core portable:** display contract, IT8951 protocol, geometry, core layout;
+  continuously compiled for `thumbv7em-none-eabihf`.
 - **Alloc portable:** scenes and richer layout on targets with an allocator.
 - **Host/large target:** full text/font database, image decoders, contiguous
   Gray8 frame history, network-backed apps.

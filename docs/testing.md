@@ -13,8 +13,12 @@ Every developer and CI run executes without devices:
 7. compile-check for `aarch64-unknown-linux-gnu`.
 
 CI enforces a 75% workspace line-coverage floor. Coverage is a regression
-signal, not a substitute for assertions or hardware evidence. Run `just
-coverage` for an HTML report.
+signal, not a substitute for assertions or hardware evidence. Layout, runtime,
+and simulator also enforce independent 75% floors so aggregate coverage cannot
+hide a weak risk-critical crate. Run `just coverage` for an HTML report.
+
+Deterministic CI tests are not retried. A transient failure is evidence to
+investigate rather than a passing result.
 
 No ignored test may silently become a physical test. Hardware access will live
 in a dedicated binary and require explicit configuration plus opt-in.
@@ -36,6 +40,10 @@ The IT8951 transport fake records commands, words, reads, reset, and ready
 behavior. Add fixtures from logic-analyzer traces once hardware bring-up begins.
 Test timeouts, stuck-ready, short transfers, invalid device info, unsupported
 LUTs, alignment boundaries, and VCOM mismatch.
+
+Refresh-planner tests must cover both previous and next pixels across the final
+aligned region, sparse damage with large bounds, unsupported capabilities, and
+the separation between planning and successful-history commit.
 
 ## Physical test ladder
 

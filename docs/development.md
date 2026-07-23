@@ -2,21 +2,26 @@
 
 ## Toolchain
 
-Rust 1.97.1 is installed through the community asdf Rust plugin because this
-development environment standardizes language versions with asdf. That plugin
-wraps rustup; `rust-toolchain.toml` remains the repository authority for
-components and targets. This preserves Rust-native tooling such as components,
-target standard libraries, and per-project overrides.
+`rust-toolchain.toml` is the repository authority for Rust 1.97.1, components,
+and targets. The portable contributor path is rustup. Hipwerk's optional
+community asdf Rust plugin wraps rustup and honors `.tool-versions`, preserving
+Rust-native components and per-project overrides.
 
 The workspace uses Rust Edition 2024 and Cargo resolver 3. The toolchain is
 pinned, and `Cargo.lock` is committed because the workspace contains deployable
 applications and reproducible hardware behavior matters.
 
 ```sh
-asdf install
 rustup show
 rustc --version
 cargo --version
+```
+
+For the Hipwerk asdf workflow:
+
+```sh
+asdf plugin add rust https://github.com/code-lever/asdf-rust.git
+asdf install
 ```
 
 ## Daily loop
@@ -53,10 +58,10 @@ cargo deny check
 - `Cargo.lock` changes are reviewed like code.
 - Dependabot updates Cargo and pinned GitHub Actions weekly.
 
-Current text direction is `cosmic-text` rather than assembling shaping,
-fallback, bidi, wrapping, and rasterization independently. The backend remains
-behind `paper-text` so PaperOS owns its stable typography contract and can use a
-smaller constrained implementation later.
+The host text backend is `cosmic-text` 0.19 rather than independently assembling
+shaping, fallback, bidi, wrapping, and rasterization. It remains behind
+`paper-text`, which exposes coverage pixels instead of backend cache keys, so a
+smaller constrained implementation can satisfy the same contract later.
 
 ## Adding a crate
 

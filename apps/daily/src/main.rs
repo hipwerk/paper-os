@@ -1,3 +1,5 @@
+//! Placeholder Daily preview executable for the simulator-only foundation.
+
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;

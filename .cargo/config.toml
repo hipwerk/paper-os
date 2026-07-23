@@ -1,5 +1,4 @@
 [alias]
-ci = "test --workspace --all-targets --all-features"
 lint = "clippy --workspace --all-targets --all-features -- -D warnings"
 docs = "doc --workspace --all-features --no-deps"
 

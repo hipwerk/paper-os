@@ -8,8 +8,10 @@ documented, and demonstrated at its lowest real boundary.
 - Rust 1.97.1 workspace with Edition 2024 and resolver 3
 - Requested platform crates plus simulator and Daily reference app
 - Geometry, Gray8 framebuffer, linear layout, scene model
-- Bounding-box diff and conservative refresh planner
-- Typed VCOM, IT8951 device probe, LUT-specific A2 mapping
+- Validated constraints, rational logical scaling, exact fit/shrink layout
+- Pure bounding-box diff and capability-checked refresh planner
+- `cosmic-text` shaping/rasterization backend boundary
+- Non-mutating IT8951 probe, explicit typed VCOM write, fail-closed LUT mapping
 - Unit/property tests, CI, dependency policy, agent guidance
 - Pi deployment and Waveshare lab plan
 
@@ -28,7 +30,7 @@ Waveshare C demo, VCOM is verified, and failures time out safely.
 
 ## Slice 2: typography and preview
 
-- `cosmic-text` backend behind `paper-text`
+- integrate the existing `cosmic-text` backend into the scene rasterizer
 - Bundled OFL-licensed variable/static font fixtures with license manifest
 - paragraph shaping, bidi, kerning, ligatures, wrapping, and ellipsis
 - grayscale glyph rasterization into `paper-graphics`

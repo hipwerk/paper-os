@@ -39,10 +39,10 @@ fixture profile and verify against the board revision and `gpioinfo`.
 
 - INIT/cleanup is mode 0.
 - GC16 quality grayscale is mode 2.
-- Fast A2 mode is firmware/LUT-dependent: M641 uses mode 4; other documented
-  boards commonly use mode 6.
-- On the 6-inch M641 family, 1-bpp update X and width require four-byte
-  (32-pixel) alignment.
+- Fast A2 mode is allowlisted by firmware/LUT: M641 uses mode 4; documented M841
+  families use mode 6. Unknown LUTs do not advertise fast refresh.
+- On 6-inch M641 and M841_TFAB512 firmware, 1-bpp update X and width require
+  four-byte (32-pixel) alignment.
 - Pixel buffers support 1/2/4/8-bpp; endian/packing is part of the controller
   adapter, not application rendering.
 - Panel size, image-buffer address, firmware, and LUT are probed rather than
@@ -66,8 +66,9 @@ Never select the first detected device when a test can alter VCOM or refresh.
    doubt.
 3. Run the vendor demo once with the exact VCOM. Record its device-info output
    and confirm the panel itself renders correctly.
-4. Run PaperOS probe-only mode. Compare panel size, memory address, firmware,
-   LUT, and current VCOM to the baseline.
+4. Run PaperOS probe-only mode. It resets, wakes, reads identity and VCOM, and
+   never writes VCOM. Compare panel size, memory address, firmware, LUT, and
+   current VCOM to the baseline.
 5. Run a white INIT cleanup, then a calibration page using GC16, then sleep.
 6. Add partial and A2 experiments only after the full path is stable.
 
@@ -84,7 +85,8 @@ quality is the claim.
 
 ## Authoritative references
 
-- Waveshare 6-inch HD E-Paper HAT wiki and current demo source
+- [Waveshare 6-inch HD E-Paper HAT wiki](https://www.waveshare.com/wiki/6inch_HD_e-Paper_HAT)
+- [Reviewed Waveshare demo source at commit 8640693](https://github.com/waveshareteam/IT8951-ePaper/tree/86406933d8f22af9fd3f2152b4958610c054b9a8)
 - IT8951 I80/SPI/I2C programming guide linked by Waveshare
 - Raspberry Pi SPI/spidev and GPIO character-device documentation
 

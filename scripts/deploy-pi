@@ -7,6 +7,17 @@ set -euo pipefail
 paperos_target="${PAPEROS_TARGET:-aarch64-unknown-linux-gnu}"
 paperos_remote="${PAPEROS_PI_USER}@${PAPEROS_PI_HOST}"
 paperos_binary="target/${paperos_target}/release/daily"
+paperos_remote_tmp=""
+
+cleanup_remote_tmp() {
+    if [[ -n "${paperos_remote_tmp}" ]]; then
+        ssh "${paperos_remote}" bash -s -- "${paperos_remote_tmp}" <<'REMOTE_CLEANUP' || true
+rm -f -- "$1"
+REMOTE_CLEANUP
+    fi
+}
+
+trap cleanup_remote_tmp EXIT
 
 if ! cargo zigbuild --version >/dev/null 2>&1; then
     echo "cargo-zigbuild is required; run: cargo install --locked cargo-zigbuild" >&2
@@ -14,9 +25,33 @@ if ! cargo zigbuild --version >/dev/null 2>&1; then
 fi
 
 cargo zigbuild --locked --release --target "${paperos_target}" -p daily
-scp "${paperos_binary}" "${paperos_remote}:/tmp/paperos-daily"
-ssh "${paperos_remote}" \
-    "sudo install -D -m 0755 /tmp/paperos-daily /opt/paperos/bin/daily && rm /tmp/paperos-daily"
+paperos_release="$(shasum -a 256 "${paperos_binary}" | awk '{print substr($1, 1, 16)}')"
+paperos_remote_tmp_candidate="$(ssh "${paperos_remote}" 'mktemp /tmp/paperos-daily.XXXXXX')"
 
-echo "Installed /opt/paperos/bin/daily on ${PAPEROS_PI_HOST}."
+if [[ ! "${paperos_remote_tmp_candidate}" =~ ^/tmp/paperos-daily\.[[:alnum:]]+$ ]]; then
+    echo "Pi returned an unexpected temporary path: ${paperos_remote_tmp_candidate}" >&2
+    exit 1
+fi
+paperos_remote_tmp="${paperos_remote_tmp_candidate}"
+
+scp "${paperos_binary}" "${paperos_remote}:${paperos_remote_tmp}"
+ssh "${paperos_remote}" bash -s -- "${paperos_remote_tmp}" "${paperos_release}" <<'REMOTE'
+set -euo pipefail
+
+remote_tmp="$1"
+release_id="$2"
+release_dir="/opt/paperos/releases"
+binary_dir="/opt/paperos/bin"
+release_path="${release_dir}/daily-${release_id}"
+next_link="${binary_dir}/.daily-${release_id}"
+
+sudo install -d -m 0755 "${release_dir}" "${binary_dir}"
+sudo install -m 0755 "${remote_tmp}" "${release_path}"
+sudo ln -sfn "../releases/daily-${release_id}" "${next_link}"
+sudo mv -Tf "${next_link}" "${binary_dir}/daily"
+rm -f -- "${remote_tmp}"
+REMOTE
+paperos_remote_tmp=""
+
+echo "Activated /opt/paperos/releases/daily-${paperos_release} on ${PAPEROS_PI_HOST}."
 echo "This is an architecture smoke-test binary; it does not access the panel."
