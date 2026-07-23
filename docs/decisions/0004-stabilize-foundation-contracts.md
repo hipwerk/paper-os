@@ -1,6 +1,7 @@
 # ADR 0004: Stabilize layout, text, refresh, and controller contracts
 
-- Status: accepted
+- Status: accepted; render-context, refresh-commit, and capability details
+  refined by ADR 0005
 - Date: 2026-07-23
 
 ## Context

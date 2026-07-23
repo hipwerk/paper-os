@@ -77,37 +77,40 @@ jobs:
       - name: Lint shell scripts
         run: shellcheck scripts/*
 
+      - name: Verify committed dependency resolution
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo nextest run --workspace --all-targets --all-features --profile ci
+        run: cargo nextest run --locked --workspace --all-targets --all-features --profile ci
 
       - name: Test documentation
-        run: cargo test --doc --workspace --all-features
+        run: cargo test --locked --doc --workspace --all-features
 
       - name: Check line coverage
-        run: cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 75
+        run: cargo llvm-cov --locked --workspace --all-features --summary-only --fail-under-lines 75
 
       - name: Build documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --locked --workspace --all-features --no-deps
 
       - name: Check Raspberry Pi target
-        run: cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
+        run: cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu
 
       - name: Check portable core without an operating system
-        run: cargo check -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
+        run: cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
 
       - name: Check risk-critical crate coverage
         run: |
-          cargo llvm-cov -p paper-layout --all-features --summary-only --fail-under-lines 75
-          cargo llvm-cov -p paper-runtime --all-features --summary-only --fail-under-lines 75
-          cargo llvm-cov -p paper-simulator --all-features --summary-only --fail-under-lines 75
+          cargo llvm-cov --locked -p paper-layout --all-features --summary-only --fail-under-lines 75
+          cargo llvm-cov --locked -p paper-runtime --all-features --summary-only --fail-under-lines 75
+          cargo llvm-cov --locked -p paper-simulator --all-features --summary-only --fail-under-lines 75
 
       - name: Check advisories, licenses, bans, and sources
         run: cargo deny check

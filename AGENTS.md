@@ -5,8 +5,8 @@ OS, Linux distribution, web renderer, or Waveshare-only application. Preserve
 application portability and treat typography, deterministic output, and panel
 health as product requirements.
 
-Current status: simulator and portable protocol only. No Linux display adapter
-or physical upload path exists yet.
+Hardware status: simulator and portable IT8951 control protocol only. No Linux
+display adapter or physical upload path exists yet.
 
 ## Read only what the task needs
 
@@ -24,11 +24,11 @@ linked document by default.
 ## Commands
 
 - Format: `cargo fmt --all -- --check`
-- Lint: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- Test: `cargo test --workspace --all-targets --all-features`
-- Docs: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`
-- Pi target: `cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu`
-- Portable core: `cargo check -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf`
+- Lint: `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+- Test: `cargo test --locked --workspace --all-targets --all-features`
+- Docs: `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps`
+- Pi target: `cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu`
+- Portable core: `cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf`
 - Preview: `cargo run -p daily -- artifacts/daily.pgm`
 - Full local gate: `just ci` when `just` is installed.
 
@@ -44,8 +44,11 @@ linked document by default.
 - No unreviewed `unsafe`. Workspace lints forbid it.
 - Add deterministic tests with every behavior change. Prefer property tests for
   geometry/diff invariants and golden render tests for typography.
-- Refresh planning must be pure. Record ghosting/cleanup history only after a
-  backend confirms success. Unknown controller firmware fails closed.
+- Refresh planning must be pure. Commit an opaque pending update only after a
+  backend confirms success; mark indeterminate outcomes uncertain so the next
+  plan is full. Cold starts are uncertain; only restore a known panel frame
+  together with its committed partial-update count. Unknown controller firmware
+  fails closed.
 - Never run physical-panel tests, set VCOM, or refresh hardware without explicit
   user authorization and the matching local panel profile. Never guess VCOM.
 - Do not commit fonts, photos, books, API keys, `.env` files, panel-local

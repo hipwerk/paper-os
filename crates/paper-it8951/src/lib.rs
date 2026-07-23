@@ -8,7 +8,9 @@
 
 use core::fmt;
 
-use paper_display::{DisplayCapabilities, PixelFormat, Size, UpdateConstraints, Waveform};
+use paper_display::{
+    DisplayCapabilities, PixelFormat, Size, UpdateConstraints, UpdateProfile, Waveform,
+};
 
 const COMMAND_SYSTEM_RUN: u16 = 0x0001;
 const COMMAND_STANDBY: u16 = 0x0002;
@@ -17,17 +19,63 @@ const COMMAND_GET_DEVICE_INFO: u16 = 0x0302;
 const COMMAND_VCOM: u16 = 0x0039;
 const DEVICE_INFO_WORDS: usize = 20;
 
-const FORMATS: &[PixelFormat] = &[
-    PixelFormat::Monochrome1,
-    PixelFormat::Gray2,
-    PixelFormat::Gray4,
-    PixelFormat::Gray8,
+const QUALITY_PROFILES: &[UpdateProfile] = &[
+    UpdateProfile::new(
+        PixelFormat::Gray4,
+        Waveform::Initialize,
+        false,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Gray8,
+        Waveform::Grayscale,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Gray4,
+        Waveform::Grayscale,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Gray2,
+        Waveform::Grayscale,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Monochrome1,
+        Waveform::Grayscale,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
 ];
-const QUALITY_WAVEFORMS: &[Waveform] = &[Waveform::Initialize, Waveform::Grayscale];
-const FAST_WAVEFORMS: &[Waveform] = &[
-    Waveform::Initialize,
-    Waveform::Grayscale,
-    Waveform::FastMonochrome,
+const FAST_ALIGNED_PROFILES: &[UpdateProfile] = &[
+    QUALITY_PROFILES[0],
+    QUALITY_PROFILES[1],
+    QUALITY_PROFILES[2],
+    QUALITY_PROFILES[3],
+    QUALITY_PROFILES[4],
+    UpdateProfile::new(
+        PixelFormat::Monochrome1,
+        Waveform::FastMonochrome,
+        true,
+        UpdateConstraints::new(32, 1, 32, 1).expect("IT8951 fast-profile alignments are non-zero"),
+    ),
+];
+const FAST_UNRESTRICTED_PROFILES: &[UpdateProfile] = &[
+    QUALITY_PROFILES[0],
+    QUALITY_PROFILES[1],
+    QUALITY_PROFILES[2],
+    QUALITY_PROFILES[3],
+    QUALITY_PROFILES[4],
+    UpdateProfile::new(
+        PixelFormat::Monochrome1,
+        Waveform::FastMonochrome,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
 ];
 
 /// The positive magnitude of the negative panel VCOM printed on its FPC.
@@ -137,20 +185,14 @@ impl DeviceInfo {
     /// Builds conservative display capabilities from the probed LUT.
     pub fn capabilities(self) -> DisplayCapabilities {
         let family = self.lut_family();
-        let supports_fast = family.fast_monochrome_mode().is_some();
         DisplayCapabilities {
             native_size: self.panel_size,
-            supported_formats: FORMATS,
-            supported_waveforms: if supports_fast {
-                FAST_WAVEFORMS
+            update_profiles: if family.requires_four_byte_alignment() {
+                FAST_ALIGNED_PROFILES
+            } else if family.fast_monochrome_mode().is_some() {
+                FAST_UNRESTRICTED_PROFILES
             } else {
-                QUALITY_WAVEFORMS
-            },
-            partial_updates: true,
-            fast_monochrome_constraints: if family.requires_four_byte_alignment() {
-                UpdateConstraints::new(32, 1, 32, 1)
-            } else {
-                UpdateConstraints::UNRESTRICTED
+                QUALITY_PROFILES
             },
         }
     }
@@ -221,6 +263,13 @@ pub enum Error<E> {
     InvalidDeviceInfo,
     /// The controller returned a zero or implausible VCOM magnitude.
     InvalidVcomResponse,
+    /// A VCOM write completed at the transport layer but did not persist.
+    VcomMismatch {
+        /// Requested positive magnitude.
+        requested: VcomMillivolts,
+        /// Value observed immediately after the write.
+        observed: VcomMillivolts,
+    },
 }
 
 impl<E: fmt::Display> fmt::Display for Error<E> {
@@ -229,6 +278,15 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
             Self::Transport(error) => write!(formatter, "IT8951 transport error: {error}"),
             Self::InvalidDeviceInfo => formatter.write_str("IT8951 returned an invalid panel size"),
             Self::InvalidVcomResponse => formatter.write_str("IT8951 returned an invalid VCOM"),
+            Self::VcomMismatch {
+                requested,
+                observed,
+            } => write!(
+                formatter,
+                "IT8951 VCOM verification failed: requested {} mV, observed {} mV",
+                requested.get(),
+                observed.get()
+            ),
         }
     }
 }
@@ -283,7 +341,7 @@ impl<T: Transport> Controller<T> {
         VcomMillivolts::new(response[0]).ok_or(Error::InvalidVcomResponse)
     }
 
-    /// Explicitly writes VCOM.
+    /// Explicitly writes VCOM and verifies matching controller readback.
     ///
     /// This persistently changes a panel-health-sensitive controller setting.
     /// Callers must verify the value from the exact panel FPC and obtain operator
@@ -295,7 +353,15 @@ impl<T: Transport> Controller<T> {
         self.transport.write_word(1).map_err(Error::Transport)?;
         self.transport
             .write_word(vcom.get())
-            .map_err(Error::Transport)
+            .map_err(Error::Transport)?;
+        let observed = self.vcom()?;
+        if observed != vcom {
+            return Err(Error::VcomMismatch {
+                requested: vcom,
+                observed,
+            });
+        }
+        Ok(())
     }
 
     /// Puts the controller in system-run state.
@@ -332,10 +398,10 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    use paper_display::{Size, UpdateConstraints, Waveform};
+    use paper_display::{PixelFormat, Size, UpdateConstraints, Waveform};
 
     use super::{
-        COMMAND_GET_DEVICE_INFO, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo,
+        COMMAND_GET_DEVICE_INFO, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo, Error,
         LutFamily, Transport, VcomMillivolts,
     };
 
@@ -426,8 +492,25 @@ mod tests {
     }
 
     #[test]
+    fn literal_controller_words_decode_lut_byte_order() {
+        let mut words = [0_u16; super::DEVICE_INFO_WORDS];
+        words[0] = 1448;
+        words[1] = 1072;
+        // The transport returns host-order words assembled from MSB-first SPI.
+        // Casting those words to bytes on Waveshare's little-endian Pi yields
+        // "M641", so this fixture intentionally does not call words_for_lut.
+        words[12] = 0x364d;
+        words[13] = 0x3134;
+
+        assert_eq!(DeviceInfo::from_words(&words).lut_family(), LutFamily::M641);
+    }
+
+    #[test]
     fn setting_vcom_is_a_separate_explicit_operation() {
-        let transport = FakeTransport::default();
+        let transport = FakeTransport {
+            operations: Vec::new(),
+            reads: vec![1_500],
+        };
         let mut controller = Controller::new(transport);
         controller
             .set_vcom(VcomMillivolts::new(1_500).unwrap())
@@ -438,7 +521,27 @@ mod tests {
                 Operation::Command(COMMAND_VCOM),
                 Operation::Write(1),
                 Operation::Write(1_500),
+                Operation::Command(COMMAND_VCOM),
+                Operation::Write(0),
             ]
+        );
+    }
+
+    #[test]
+    fn setting_vcom_fails_when_readback_does_not_match() {
+        let transport = FakeTransport {
+            operations: Vec::new(),
+            reads: vec![1_400],
+        };
+        let mut controller = Controller::new(transport);
+        let requested = VcomMillivolts::new(1_500).unwrap();
+
+        assert_eq!(
+            controller.set_vcom(requested),
+            Err(Error::VcomMismatch {
+                requested,
+                observed: VcomMillivolts::new(1_400).unwrap(),
+            })
         );
     }
 
@@ -452,8 +555,11 @@ mod tests {
             assert_eq!(info.lut_family(), family);
             assert_eq!(info.fast_monochrome_mode(), Some(mode));
             assert_eq!(
-                info.capabilities().fast_monochrome_constraints,
-                UpdateConstraints::new(32, 1, 32, 1)
+                info.capabilities()
+                    .profile(PixelFormat::Monochrome1, Waveform::FastMonochrome)
+                    .unwrap()
+                    .constraints(),
+                UpdateConstraints::new(32, 1, 32, 1).unwrap()
             );
         }
     }
@@ -464,10 +570,9 @@ mod tests {
         assert_eq!(info.lut_family(), LutFamily::Unknown);
         assert_eq!(info.fast_monochrome_mode(), None);
         assert!(
-            !info
-                .capabilities()
-                .supported_waveforms
-                .contains(&Waveform::FastMonochrome)
+            info.capabilities()
+                .profile(PixelFormat::Monochrome1, Waveform::FastMonochrome)
+                .is_none()
         );
     }
 

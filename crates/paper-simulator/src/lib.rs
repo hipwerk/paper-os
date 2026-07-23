@@ -5,16 +5,24 @@ use std::fs;
 use std::path::Path;
 
 use paper_display::{
-    Display, DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateRequest,
-    Waveform,
+    Display, DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateProfile,
+    UpdateRequest, Waveform,
 };
 use paper_graphics::{Framebuffer, GraphicsError, Gray8};
 
-const FORMATS: &[PixelFormat] = &[PixelFormat::Gray8];
-const WAVEFORMS: &[Waveform] = &[
-    Waveform::Initialize,
-    Waveform::Grayscale,
-    Waveform::FastMonochrome,
+const PROFILES: &[UpdateProfile] = &[
+    UpdateProfile::new(
+        PixelFormat::Gray8,
+        Waveform::Initialize,
+        false,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Gray8,
+        Waveform::Grayscale,
+        true,
+        UpdateConstraints::UNRESTRICTED,
+    ),
 ];
 
 /// Simulator update or preview failure.
@@ -22,12 +30,15 @@ const WAVEFORMS: &[Waveform] = &[
 pub enum SimulatorError {
     /// Framebuffer creation failed.
     Graphics(GraphicsError),
-    /// The requested region is empty or outside the simulated panel.
+    /// The region is empty, outside the panel, or illegal for its profile.
     InvalidRegion,
-    /// The simulator does not accept the requested pixel encoding.
-    UnsupportedPixelFormat(PixelFormat),
-    /// The simulator does not advertise the requested waveform.
-    UnsupportedWaveform(Waveform),
+    /// The simulator does not advertise the requested format/waveform pair.
+    UnsupportedUpdateProfile {
+        /// Requested controller-bound encoding.
+        pixel_format: PixelFormat,
+        /// Requested semantic waveform.
+        waveform: Waveform,
+    },
     /// Updates are rejected until the display is woken.
     Sleeping,
     /// The source does not contain every requested row.
@@ -41,12 +52,13 @@ impl fmt::Display for SimulatorError {
         match self {
             Self::Graphics(error) => error.fmt(formatter),
             Self::InvalidRegion => formatter.write_str("update region is outside the display"),
-            Self::UnsupportedPixelFormat(format) => {
-                write!(formatter, "simulator does not support {format:?}")
-            }
-            Self::UnsupportedWaveform(waveform) => {
-                write!(formatter, "simulator does not support {waveform:?}")
-            }
+            Self::UnsupportedUpdateProfile {
+                pixel_format,
+                waveform,
+            } => write!(
+                formatter,
+                "simulator does not support {pixel_format:?} with {waveform:?}"
+            ),
             Self::Sleeping => formatter.write_str("simulator display is sleeping"),
             Self::BufferTooShort => formatter.write_str("update pixel buffer is too short"),
             Self::Io(error) => error.fmt(formatter),
@@ -82,10 +94,7 @@ impl SimulatorDisplay {
         Ok(Self {
             capabilities: DisplayCapabilities {
                 native_size: size,
-                supported_formats: FORMATS,
-                supported_waveforms: WAVEFORMS,
-                partial_updates: true,
-                fast_monochrome_constraints: UpdateConstraints::UNRESTRICTED,
+                update_profiles: PROFILES,
             },
             frame: Framebuffer::new(size, Gray8::WHITE)?,
             updates: Vec::new(),
@@ -137,12 +146,13 @@ impl Display for SimulatorDisplay {
         if self.sleeping {
             return Err(SimulatorError::Sleeping);
         }
-        if !self.capabilities.supports_format(request.pixel_format) {
-            return Err(SimulatorError::UnsupportedPixelFormat(request.pixel_format));
-        }
-        if !self.capabilities.supports_waveform(request.waveform) {
-            return Err(SimulatorError::UnsupportedWaveform(request.waveform));
-        }
+        let profile = self
+            .capabilities
+            .profile(request.pixel_format, request.waveform)
+            .ok_or(SimulatorError::UnsupportedUpdateProfile {
+                pixel_format: request.pixel_format,
+                waveform: request.waveform,
+            })?;
         if request
             .region
             .intersection(Rect::from_size(self.capabilities.native_size))
@@ -150,12 +160,22 @@ impl Display for SimulatorDisplay {
         {
             return Err(SimulatorError::InvalidRegion);
         }
+        let full_panel = Rect::from_size(self.capabilities.native_size);
+        if (request.region != full_panel && !profile.supports_partial())
+            || profile
+                .constraints()
+                .align_region(request.region, self.capabilities.native_size)
+                != request.region
+        {
+            return Err(SimulatorError::InvalidRegion);
+        }
+        let row_width = request.region.size.width as usize;
+        let preceding_rows = request.region.size.height.saturating_sub(1) as usize;
         let required = request
             .stride_bytes
-            .saturating_mul(request.region.size.height as usize);
-        if request.pixels.len() < required
-            || request.stride_bytes < request.region.size.width as usize
-        {
+            .saturating_mul(preceding_rows)
+            .saturating_add(row_width);
+        if request.pixels.len() < required || request.stride_bytes < row_width {
             return Err(SimulatorError::BufferTooShort);
         }
 
@@ -187,7 +207,9 @@ impl Display for SimulatorDisplay {
 
 #[cfg(test)]
 mod tests {
-    use paper_display::{Display, PixelFormat, Rect, Size, UpdateRequest, Waveform};
+    use paper_display::{Display, PixelFormat, Point, Rect, Size, UpdateRequest, Waveform};
+    use paper_graphics::{Framebuffer, Gray8};
+    use paper_runtime::{RefreshPlan, RefreshPolicy, RefreshRuntime};
 
     use super::{SimulatorDisplay, SimulatorError};
 
@@ -208,6 +230,42 @@ mod tests {
             display.frame().pixels(),
             &[255, 255, 255, 255, 255, 0, 127, 255, 255, 255, 255, 255]
         );
+    }
+
+    #[test]
+    fn runtime_plan_uses_a_profile_the_simulator_executes() {
+        let size = Size::new(4, 3);
+        let previous = Framebuffer::new(size, Gray8::WHITE).unwrap();
+        let mut next = previous.clone();
+        next.set(Point::new(1, 1), Gray8::BLACK);
+        let mut runtime =
+            RefreshRuntime::from_known_panel_state(previous, 0, RefreshPolicy::default()).unwrap();
+        let mut display = SimulatorDisplay::new(size).unwrap();
+        let pending = runtime.plan(next, display.capabilities()).unwrap();
+
+        let RefreshPlan::Partial {
+            region,
+            pixel_format,
+            waveform,
+            ..
+        } = pending.plan()
+        else {
+            panic!("one changed pixel should produce a partial simulator update");
+        };
+        let stride = pending.framebuffer().stride_bytes();
+        let source_start = region.origin.y as usize * stride + region.origin.x as usize;
+        display
+            .update(UpdateRequest {
+                region,
+                pixel_format,
+                stride_bytes: stride,
+                pixels: &pending.framebuffer().pixels()[source_start..],
+                waveform,
+            })
+            .unwrap();
+        runtime.commit_success(pending).unwrap();
+
+        assert_eq!(display.frame(), runtime.previous_frame());
     }
 
     #[test]
@@ -262,9 +320,10 @@ mod tests {
         });
         assert!(matches!(
             unsupported_format,
-            Err(SimulatorError::UnsupportedPixelFormat(
-                PixelFormat::Monochrome1
-            ))
+            Err(SimulatorError::UnsupportedUpdateProfile {
+                pixel_format: PixelFormat::Monochrome1,
+                waveform: Waveform::FastMonochrome,
+            })
         ));
 
         let unsupported_waveform = display.update(UpdateRequest {
@@ -272,14 +331,30 @@ mod tests {
             pixel_format: PixelFormat::Gray8,
             stride_bytes: 2,
             pixels: &[0, 0],
-            waveform: Waveform::ControllerSpecific(99),
+            waveform: Waveform::FastMonochrome,
         });
         assert!(matches!(
             unsupported_waveform,
-            Err(SimulatorError::UnsupportedWaveform(
-                Waveform::ControllerSpecific(99)
-            ))
+            Err(SimulatorError::UnsupportedUpdateProfile {
+                pixel_format: PixelFormat::Gray8,
+                waveform: Waveform::FastMonochrome,
+            })
         ));
+    }
+
+    #[test]
+    fn full_only_profile_rejects_bounded_update() {
+        let mut display = SimulatorDisplay::new(Size::new(2, 2)).unwrap();
+        let result = display.update(UpdateRequest {
+            region: Rect::new(0, 0, 1, 1),
+            pixel_format: PixelFormat::Gray8,
+            stride_bytes: 1,
+            pixels: &[0],
+            waveform: Waveform::Initialize,
+        });
+
+        assert!(matches!(result, Err(SimulatorError::InvalidRegion)));
+        assert!(display.updates().is_empty());
     }
 
     #[test]
@@ -293,5 +368,21 @@ mod tests {
             waveform: Waveform::Grayscale,
         });
         assert!(matches!(result, Err(SimulatorError::BufferTooShort)));
+    }
+
+    #[test]
+    fn final_source_row_requires_only_its_visible_pixels() {
+        let mut display = SimulatorDisplay::new(Size::new(4, 3)).unwrap();
+        display
+            .update(UpdateRequest {
+                region: Rect::new(3, 2, 1, 1),
+                pixel_format: PixelFormat::Gray8,
+                stride_bytes: 4,
+                pixels: &[0],
+                waveform: Waveform::Grayscale,
+            })
+            .unwrap();
+
+        assert_eq!(display.frame().get(Point::new(3, 2)), Some(Gray8::BLACK));
     }
 }

@@ -11,5 +11,8 @@ publish = false
 paper-display.workspace = true
 paper-graphics.workspace = true
 
+[dev-dependencies]
+paper-runtime.workspace = true
+
 [lints]
 workspace = true

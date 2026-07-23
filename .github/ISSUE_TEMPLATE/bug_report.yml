@@ -34,5 +34,5 @@ body:
     attributes:
       label: Hardware safety
       options:
-        - label: I have removed VCOM values, credentials, and other local secrets.
+        - label: I have removed credentials and other local secrets; hardware reports retain the exact VCOM magnitude used.
           required: true

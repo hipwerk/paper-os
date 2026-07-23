@@ -28,8 +28,8 @@ asdf install
 
 ```sh
 cargo fmt --all
-cargo test --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo run -p daily -- artifacts/daily.pgm
 ```
 
@@ -37,14 +37,14 @@ Fast tests, dependency policy, workflow linting, typo checks, and coverage use
 small developer tools. On macOS they can be installed with:
 
 ```sh
-brew install just cargo-nextest cargo-deny typos-cli actionlint cargo-llvm-cov
+brew install just cargo-nextest cargo-deny typos-cli actionlint cargo-llvm-cov shellcheck
 ```
 
 Portable Cargo installs are also available for the Rust-native tools:
 
 ```sh
 cargo install --locked cargo-nextest cargo-deny typos-cli cargo-llvm-cov
-cargo nextest run --workspace --all-features
+cargo nextest run --locked --workspace --all-features
 cargo deny check
 ```
 

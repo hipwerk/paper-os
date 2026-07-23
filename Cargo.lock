@@ -299,6 +299,7 @@ version = "0.1.0"
 dependencies = [
  "paper-display",
  "paper-graphics",
+ "paper-runtime",
 ]
 
 [[package]]

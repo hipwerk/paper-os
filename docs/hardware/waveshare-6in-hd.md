@@ -47,6 +47,7 @@ fixture profile and verify against the board revision and `gpioinfo`.
   adapter, not application rendering.
 - Panel size, image-buffer address, firmware, and LUT are probed rather than
   hard-coded.
+- Explicit VCOM writes are read back and fail on any mismatch.
 
 The physical width 1448 is not divisible by 32. Fast 1-bpp behavior at the last
 eight columns must be measured and represented as a mode-specific addressable

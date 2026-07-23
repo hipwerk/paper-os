@@ -24,7 +24,7 @@ components, and cross targets automatically:
 
 ```sh
 rustup show
-cargo test --workspace --all-targets --all-features
+cargo test --locked --workspace --all-targets --all-features
 cargo run -p daily -- artifacts/daily.pgm
 ```
 
@@ -66,16 +66,17 @@ and physical-panel work starts in [deployment](docs/deployment.md) and the
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
-cargo check -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
+cargo metadata --locked --no-deps --format-version 1
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
+cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu
+cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
 cargo deny check
 typos
 actionlint
 shellcheck scripts/*
-cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 75
+cargo llvm-cov --locked --workspace --all-features --summary-only --fail-under-lines 75
 ```
 
 Physical display tests are never part of the default test suite. They require a

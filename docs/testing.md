@@ -2,15 +2,17 @@
 
 ## Default, hardware-free gate
 
-Every developer and CI run executes without devices:
+The full developer and CI gate executes without devices:
 
 1. unit tests for data types and boundary failures;
-2. property tests for geometry, packing, clipping, diff, and layout invariants;
+2. property tests for geometry, clipping, diff, and layout invariants;
 3. fake-transport tests for exact controller command sequences;
-4. simulator integration tests for complete update requests;
-5. deterministic golden render tests once text lands;
+4. simulator integration tests for the Gray8 update profiles it implements;
+5. deterministic golden render tests after scene rasterization and bundled test
+   fonts land;
 6. clippy, rustfmt, rustdoc, dependency advisory/license checks;
-7. compile-check for `aarch64-unknown-linux-gnu`.
+7. locked dependency resolution plus compile checks for
+   `aarch64-unknown-linux-gnu` and the portable embedded core.
 
 CI enforces a 75% workspace line-coverage floor. Coverage is a regression
 signal, not a substitute for assertions or hardware evidence. Layout, runtime,
@@ -36,14 +38,18 @@ ellipsizing.
 
 ## Protocol testing
 
-The IT8951 transport fake records commands, words, reads, reset, and ready
-behavior. Add fixtures from logic-analyzer traces once hardware bring-up begins.
-Test timeouts, stuck-ready, short transfers, invalid device info, unsupported
-LUTs, alignment boundaries, and VCOM mismatch.
+The IT8951 transport fake records commands, words, reads, and reset. It verifies
+probe non-mutation, literal firmware/LUT classification, VCOM readback, mismatch
+failure, and transport sequencing. Ready timing, timeouts, short transfers, and
+logic-analyzer fixtures belong to the first host transport because the current
+portable seam represents complete synchronized transactions.
 
-Refresh-planner tests must cover both previous and next pixels across the final
-aligned region, sparse damage with large bounds, unsupported capabilities, and
-the separation between planning and successful-history commit.
+Refresh-runtime tests cover both previous and next pixels across the final
+aligned region, sparse damage with large bounds, unsupported profiles,
+generation-stale pending updates, cold and restored panel state, uncertain
+backend outcomes, and atomic framebuffer plus aging-history commit. Display
+contract tests reject zero alignment rather than treating malformed constraints
+as unrestricted.
 
 ## Physical test ladder
 

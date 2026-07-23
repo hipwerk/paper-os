@@ -157,8 +157,6 @@ pub enum Waveform {
     Grayscale,
     /// Fast black/white update; ghosting is expected to accumulate.
     FastMonochrome,
-    /// A backend-specific waveform requested by an expert caller.
-    ControllerSpecific(u16),
 }
 
 /// Physical panel rotation.
@@ -178,41 +176,65 @@ pub enum Rotation {
 /// Region restrictions for a format/waveform combination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UpdateConstraints {
-    /// Required alignment for the region's X origin.
-    pub x_alignment: u32,
-    /// Required alignment for the region's Y origin.
-    pub y_alignment: u32,
-    /// Required alignment for the region width.
-    pub width_alignment: u32,
-    /// Required alignment for the region height.
-    pub height_alignment: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 impl UpdateConstraints {
     /// Constraints accepting any integer-pixel region.
-    pub const UNRESTRICTED: Self = Self::new(1, 1, 1, 1);
+    pub const UNRESTRICTED: Self = Self {
+        x: 1,
+        y: 1,
+        width: 1,
+        height: 1,
+    };
 
-    /// Creates alignment constraints. Zero values are treated as one on use.
+    /// Creates non-zero alignment constraints.
     pub const fn new(
         x_alignment: u32,
         y_alignment: u32,
         width_alignment: u32,
         height_alignment: u32,
-    ) -> Self {
-        Self {
-            x_alignment,
-            y_alignment,
-            width_alignment,
-            height_alignment,
+    ) -> Option<Self> {
+        if x_alignment == 0 || y_alignment == 0 || width_alignment == 0 || height_alignment == 0 {
+            return None;
         }
+        Some(Self {
+            x: x_alignment,
+            y: y_alignment,
+            width: width_alignment,
+            height: height_alignment,
+        })
+    }
+
+    /// Returns the required alignment for the region's X origin.
+    pub const fn x_alignment(self) -> u32 {
+        self.x
+    }
+
+    /// Returns the required alignment for the region's Y origin.
+    pub const fn y_alignment(self) -> u32 {
+        self.y
+    }
+
+    /// Returns the required alignment for the region width.
+    pub const fn width_alignment(self) -> u32 {
+        self.width
+    }
+
+    /// Returns the required alignment for the region height.
+    pub const fn height_alignment(self) -> u32 {
+        self.height
     }
 
     /// Expands a region outward to legal boundaries, clipped to the panel.
     pub fn align_region(self, region: Rect, panel: Size) -> Rect {
-        let x_alignment = self.x_alignment.max(1);
-        let y_alignment = self.y_alignment.max(1);
-        let width_alignment = self.width_alignment.max(1);
-        let height_alignment = self.height_alignment.max(1);
+        let x_alignment = self.x;
+        let y_alignment = self.y;
+        let width_alignment = self.width;
+        let height_alignment = self.height;
 
         let x = region.origin.x - (region.origin.x % x_alignment);
         let y = region.origin.y - (region.origin.y % y_alignment);
@@ -241,30 +263,70 @@ const fn align_up(value: u32, alignment: u32) -> u32 {
     }
 }
 
+/// One legal format/waveform operation advertised by a display backend.
+///
+/// Formats and waveforms are intentionally paired: a backend must not imply
+/// that every supported format can be used with every supported waveform.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UpdateProfile {
+    pixel_format: PixelFormat,
+    waveform: Waveform,
+    partial_updates: bool,
+    constraints: UpdateConstraints,
+}
+
+impl UpdateProfile {
+    /// Creates one legal update operation.
+    pub const fn new(
+        pixel_format: PixelFormat,
+        waveform: Waveform,
+        partial_updates: bool,
+        constraints: UpdateConstraints,
+    ) -> Self {
+        Self {
+            pixel_format,
+            waveform,
+            partial_updates,
+            constraints,
+        }
+    }
+
+    /// Returns the controller-bound pixel encoding.
+    pub const fn pixel_format(self) -> PixelFormat {
+        self.pixel_format
+    }
+
+    /// Returns the semantic waveform intent.
+    pub const fn waveform(self) -> Waveform {
+        self.waveform
+    }
+
+    /// Returns whether this operation may target less than the complete panel.
+    pub const fn supports_partial(self) -> bool {
+        self.partial_updates
+    }
+
+    /// Returns the legal region alignment for partial updates.
+    pub const fn constraints(self) -> UpdateConstraints {
+        self.constraints
+    }
+}
+
 /// Immutable capabilities discovered from a display/controller pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DisplayCapabilities {
     /// Native addressable panel size.
     pub native_size: Size,
-    /// Pixel encodings the backend can accept after target conversion.
-    pub supported_formats: &'static [PixelFormat],
-    /// Semantic waveform intents the backend can map safely.
-    pub supported_waveforms: &'static [Waveform],
-    /// Whether bounded updates are supported.
-    pub partial_updates: bool,
-    /// Region restrictions for fast one-bit updates.
-    pub fast_monochrome_constraints: UpdateConstraints,
+    /// Legal update operations. Each entry is one complete supported tuple.
+    pub update_profiles: &'static [UpdateProfile],
 }
 
 impl DisplayCapabilities {
-    /// Returns whether a target pixel format is advertised.
-    pub fn supports_format(&self, format: PixelFormat) -> bool {
-        self.supported_formats.contains(&format)
-    }
-
-    /// Returns whether a semantic waveform is advertised.
-    pub fn supports_waveform(&self, waveform: Waveform) -> bool {
-        self.supported_waveforms.contains(&waveform)
+    /// Returns the exact advertised operation, if supported.
+    pub fn profile(&self, pixel_format: PixelFormat, waveform: Waveform) -> Option<UpdateProfile> {
+        self.update_profiles.iter().copied().find(|profile| {
+            profile.pixel_format() == pixel_format && profile.waveform() == waveform
+        })
     }
 }
 
@@ -306,7 +368,24 @@ pub trait Display {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, Size, UpdateConstraints};
+    use super::{
+        DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateProfile, Waveform,
+    };
+
+    const PROFILES: &[UpdateProfile] = &[
+        UpdateProfile::new(
+            PixelFormat::Gray8,
+            Waveform::Grayscale,
+            true,
+            UpdateConstraints::UNRESTRICTED,
+        ),
+        UpdateProfile::new(
+            PixelFormat::Monochrome1,
+            Waveform::FastMonochrome,
+            true,
+            UpdateConstraints::new(32, 1, 32, 1).expect("test profile alignments are non-zero"),
+        ),
+    ];
 
     #[test]
     fn intersection_uses_half_open_coordinates() {
@@ -319,9 +398,13 @@ mod tests {
 
     #[test]
     fn aligns_fast_update_outward_and_clips_to_panel() {
-        let constraints = UpdateConstraints::new(32, 1, 32, 1);
+        let constraints = UpdateConstraints::new(32, 1, 32, 1).unwrap();
         let panel = Size::new(1448, 1072);
 
+        assert_eq!(constraints.x_alignment(), 32);
+        assert_eq!(constraints.y_alignment(), 1);
+        assert_eq!(constraints.width_alignment(), 32);
+        assert_eq!(constraints.height_alignment(), 1);
         assert_eq!(
             constraints.align_region(Rect::new(31, 10, 40, 20), panel),
             Rect::new(0, 10, 96, 20)
@@ -329,6 +412,33 @@ mod tests {
         assert_eq!(
             constraints.align_region(Rect::new(1440, 10, 8, 20), panel),
             Rect::new(1440, 10, 0, 20)
+        );
+    }
+
+    #[test]
+    fn zero_alignment_is_rejected_instead_of_becoming_unrestricted() {
+        assert_eq!(UpdateConstraints::new(0, 1, 1, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 0, 1, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 1, 0, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 1, 1, 0), None);
+    }
+
+    #[test]
+    fn capabilities_match_complete_operation_profiles() {
+        let capabilities = DisplayCapabilities {
+            native_size: Size::new(1448, 1072),
+            update_profiles: PROFILES,
+        };
+
+        assert!(
+            capabilities
+                .profile(PixelFormat::Gray8, Waveform::Grayscale)
+                .is_some()
+        );
+        assert!(
+            capabilities
+                .profile(PixelFormat::Gray8, Waveform::FastMonochrome)
+                .is_none()
         );
     }
 }

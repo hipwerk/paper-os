@@ -1,6 +1,6 @@
 [alias]
-lint = "clippy --workspace --all-targets --all-features -- -D warnings"
-docs = "doc --workspace --all-features --no-deps"
+lint = "clippy --locked --workspace --all-targets --all-features -- -D warnings"
+docs = "doc --locked --workspace --all-features --no-deps"
 
 [build]
 incremental = true

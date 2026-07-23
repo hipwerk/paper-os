@@ -10,8 +10,9 @@ are involved?
 ## Verification
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --workspace --all-targets --all-features`
+- [ ] `cargo metadata --locked --no-deps --format-version 1`
+- [ ] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+- [ ] `cargo test --locked --workspace --all-targets --all-features`
 - [ ] `shellcheck scripts/*` when deployment scripts changed
 - [ ] Relevant preview/golden output reviewed
 - [ ] Pi target checked when portable code changed

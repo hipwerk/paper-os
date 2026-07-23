@@ -4,7 +4,7 @@
 //! glyph identifiers. This keeps font fallback and glyph-cache identity inside
 //! the engine that owns them.
 
-use core::convert::Infallible;
+use core::fmt;
 
 use cosmic_text::{
     Align, Attrs, Buffer, Color, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics,
@@ -189,16 +189,16 @@ pub struct TextLayout {
     pub line_count: u32,
 }
 
-/// One rasterized coverage rectangle relative to the paragraph origin.
+/// One bounded rasterized coverage rectangle relative to the paragraph origin.
 ///
 /// Glyph masks normally produce one-pixel rectangles. Decorations can produce
-/// wider rectangles without forcing the typography boundary to allocate a
-/// framebuffer.
+/// wider rectangles. Engines clip every emitted rectangle to the paragraph
+/// bounds without forcing the typography boundary to allocate a framebuffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageRect {
-    /// Signed horizontal offset; glyph overhang may be negative.
+    /// Non-negative horizontal offset within the paragraph bounds.
     pub x: i32,
-    /// Signed vertical offset; glyph overhang may be negative.
+    /// Non-negative vertical offset within the paragraph bounds.
     pub y: i32,
     /// Rectangle width.
     pub width: u32,
@@ -208,20 +208,40 @@ pub struct CoverageRect {
     pub coverage: u8,
 }
 
+/// Typography backend failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextError {
+    message: String,
+}
+
+impl TextError {
+    /// Wraps a backend-specific failure without exposing backend types upward.
+    pub fn backend(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for TextError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TextError {}
+
 /// Backend seam for shaping, wrapping, bidi resolution, and glyph rasterization.
 pub trait TextEngine {
-    /// Backend-specific error.
-    type Error;
-
     /// Shapes and measures a paragraph without exposing backend glyph IDs.
-    fn measure(&mut self, paragraph: &Paragraph<'_>) -> Result<TextLayout, Self::Error>;
+    fn measure(&mut self, paragraph: &Paragraph<'_>) -> Result<TextLayout, TextError>;
 
-    /// Shapes and rasterizes a paragraph into coverage rectangles.
+    /// Shapes and rasterizes a paragraph into bounded coverage rectangles.
     fn rasterize(
         &mut self,
         paragraph: &Paragraph<'_>,
         emit: &mut dyn FnMut(CoverageRect),
-    ) -> Result<TextLayout, Self::Error>;
+    ) -> Result<TextLayout, TextError>;
 }
 
 /// Host typography backend powered by `cosmic-text` and Swash.
@@ -294,9 +314,10 @@ impl Default for CosmicTextEngine {
 }
 
 impl TextEngine for CosmicTextEngine {
-    type Error = Infallible;
-
-    fn measure(&mut self, paragraph: &Paragraph<'_>) -> Result<TextLayout, Self::Error> {
+    fn measure(&mut self, paragraph: &Paragraph<'_>) -> Result<TextLayout, TextError> {
+        if paragraph_has_no_visible_area(paragraph) {
+            return Ok(TextLayout::default());
+        }
         let buffer = self.prepare_buffer(paragraph);
         Ok(measure_buffer(&buffer, paragraph.max_size))
     }
@@ -305,7 +326,10 @@ impl TextEngine for CosmicTextEngine {
         &mut self,
         paragraph: &Paragraph<'_>,
         emit: &mut dyn FnMut(CoverageRect),
-    ) -> Result<TextLayout, Self::Error> {
+    ) -> Result<TextLayout, TextError> {
+        if paragraph_has_no_visible_area(paragraph) {
+            return Ok(TextLayout::default());
+        }
         let mut buffer = self.prepare_buffer(paragraph);
         let layout = measure_buffer(&buffer, paragraph.max_size);
         buffer.draw(
@@ -313,17 +337,44 @@ impl TextEngine for CosmicTextEngine {
             &mut self.swash_cache,
             Color::rgb(0, 0, 0),
             |x, y, width, height, color| {
-                emit(CoverageRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                    coverage: color.a(),
-                });
+                if let Some(rect) = clip_coverage(
+                    CoverageRect {
+                        x,
+                        y,
+                        width,
+                        height,
+                        coverage: color.a(),
+                    },
+                    paragraph.max_size,
+                ) {
+                    emit(rect);
+                }
             },
         );
         Ok(layout)
     }
+}
+
+fn paragraph_has_no_visible_area(paragraph: &Paragraph<'_>) -> bool {
+    paragraph.max_size.is_empty() || paragraph.max_lines == Some(0)
+}
+
+fn clip_coverage(rect: CoverageRect, bounds: Size) -> Option<CoverageRect> {
+    let left = i64::from(rect.x).max(0);
+    let top = i64::from(rect.y).max(0);
+    let right = (i64::from(rect.x) + i64::from(rect.width)).min(i64::from(bounds.width));
+    let bottom = (i64::from(rect.y) + i64::from(rect.height)).min(i64::from(bounds.height));
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(CoverageRect {
+        x: i32::try_from(left).unwrap_or(i32::MAX),
+        y: i32::try_from(top).unwrap_or(i32::MAX),
+        width: u32::try_from(right - left).unwrap_or(u32::MAX),
+        height: u32::try_from(bottom - top).unwrap_or(u32::MAX),
+        coverage: rect.coverage,
+    })
 }
 
 const fn font_weight_value(weight: FontWeight) -> u16 {
@@ -451,5 +502,54 @@ mod tests {
         assert!(measured.size.height > 0);
         assert!(!coverage.is_empty());
         assert!(coverage.iter().any(|rect| rect.coverage > 0));
+    }
+
+    #[test]
+    fn empty_bounds_and_zero_lines_emit_no_coverage() {
+        let style = style();
+        let mut engine = CosmicTextEngine::new();
+        for (max_size, max_lines) in [
+            (Size::new(0, 20), None),
+            (Size::new(20, 0), None),
+            (Size::new(20, 20), Some(0)),
+        ] {
+            let paragraph = Paragraph {
+                text: "PaperOS",
+                style: &style,
+                max_size,
+                max_lines,
+                overflow: TextOverflow::Ellipsis,
+            };
+            let mut coverage = Vec::new();
+            let layout = engine
+                .rasterize(&paragraph, &mut |rect| coverage.push(rect))
+                .unwrap();
+            assert_eq!(layout, super::TextLayout::default());
+            assert!(coverage.is_empty());
+        }
+    }
+
+    #[test]
+    fn rasterized_coverage_is_clipped_to_paragraph_bounds() {
+        let style = style();
+        let paragraph = Paragraph {
+            text: "PaperOS typography overhang",
+            style: &style,
+            max_size: Size::new(30, 20),
+            max_lines: Some(1),
+            overflow: TextOverflow::Clip,
+        };
+        let mut engine = CosmicTextEngine::new();
+        let mut coverage = Vec::new();
+        engine
+            .rasterize(&paragraph, &mut |rect| coverage.push(rect))
+            .unwrap();
+
+        assert!(coverage.iter().all(|rect| {
+            rect.x >= 0
+                && rect.y >= 0
+                && u32::try_from(rect.x).unwrap() + rect.width <= paragraph.max_size.width
+                && u32::try_from(rect.y).unwrap() + rect.height <= paragraph.max_size.height
+        }));
     }
 }

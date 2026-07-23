@@ -5,12 +5,21 @@ maintainability.
 
 - Does dependency direction still match `docs/architecture.md`?
 - Are controller quirks represented as capabilities rather than leaked upward?
+- Do capabilities advertise legal format/waveform operation profiles rather
+  than independent lists?
+- Can nested widgets access the same scale and text-measurement environment?
 - Does unknown firmware fail closed instead of inheriting a guessed fast mode?
 - Can geometry arithmetic overflow, underflow, clip changed pixels, or violate
   packed-row alignment?
 - Does a fast refresh inspect old and new pixels across the final aligned region?
-- Does runtime history change only after a backend reports success?
+- Does consuming one opaque pending update atomically commit frame and aging
+  history only after backend success?
+- Does a cold start remain uncertain until a full update succeeds, and does a
+  restored state include its partial-update history?
+- Does an indeterminate backend result force a full recovery update?
+- Can malformed alignment data weaken an update profile instead of failing?
 - Can a default command touch hardware or change VCOM?
+- Does an explicit VCOM write verify controller readback?
 - Are renders deterministic across machines and are licensed fonts explicit?
 - Do tests cover empty, edge-aligned, panel-edge, grayscale, and failure cases?
 - Are comments explaining why rather than restating code?

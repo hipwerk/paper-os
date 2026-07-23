@@ -61,10 +61,11 @@ maps it to supported controller operations and may reject an illegal plan.
 
 ### Display capabilities are richer than width and height
 
-Capabilities include pixel formats, waveform families, partial-update support,
-alignment, addressable regions, power behavior, and eventually temperature and
-color planes. A backend discovered at runtime is the authority; unknown firmware
-fails closed rather than inheriting a guessed fast mode.
+Capabilities advertise legal operation profiles that pair pixel format,
+waveform, partial-update support, and alignment instead of independent lists.
+They will also include addressable regions, power behavior, and eventually
+temperature and color planes. A backend discovered at runtime is the authority;
+unknown firmware fails closed rather than inheriting a guessed fast mode.
 
 ### Interactivity should be admitted without dominating v1
 
