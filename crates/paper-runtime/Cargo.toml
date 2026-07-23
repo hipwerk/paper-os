@@ -1,0 +1,18 @@
+[package]
+name = "paper-runtime"
+description = "Framebuffer diffing and refresh policy for PaperOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+paper-display.workspace = true
+paper-graphics.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

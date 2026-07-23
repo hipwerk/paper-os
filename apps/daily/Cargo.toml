@@ -1,0 +1,16 @@
+[package]
+name = "daily"
+description = "PaperOS Daily reference application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+paper-display.workspace = true
+paper-graphics.workspace = true
+paper-simulator.workspace = true
+
+[lints]
+workspace = true

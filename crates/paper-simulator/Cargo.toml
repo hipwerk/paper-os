@@ -1,0 +1,15 @@
+[package]
+name = "paper-simulator"
+description = "Deterministic in-memory display backend and preview export for PaperOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+paper-display.workspace = true
+paper-graphics.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[alias]
+ci = "test --workspace --all-targets --all-features"
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+docs = "doc --workspace --all-features --no-deps"
+
+[build]
+incremental = true
+
+[target.aarch64-unknown-linux-gnu]
+# Cross-linker configuration is intentionally not set here. Use cargo-zigbuild
+# as documented in docs/deployment.md, or compile natively on the Pi.

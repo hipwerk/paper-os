@@ -1,0 +1,185 @@
+use core::fmt;
+use std::fs;
+use std::path::Path;
+
+use paper_display::{
+    Display, DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateRequest,
+    Waveform,
+};
+use paper_graphics::{Framebuffer, GraphicsError, Gray8};
+
+const FORMATS: &[PixelFormat] = &[PixelFormat::Gray8];
+const WAVEFORMS: &[Waveform] = &[
+    Waveform::Initialize,
+    Waveform::Grayscale,
+    Waveform::FastMonochrome,
+];
+
+#[derive(Debug)]
+pub enum SimulatorError {
+    Graphics(GraphicsError),
+    InvalidRegion,
+    UnsupportedPixelFormat(PixelFormat),
+    BufferTooShort,
+    Io(std::io::Error),
+}
+
+impl fmt::Display for SimulatorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Graphics(error) => error.fmt(formatter),
+            Self::InvalidRegion => formatter.write_str("update region is outside the display"),
+            Self::UnsupportedPixelFormat(format) => {
+                write!(formatter, "simulator does not support {format:?}")
+            }
+            Self::BufferTooShort => formatter.write_str("update pixel buffer is too short"),
+            Self::Io(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SimulatorError {}
+
+impl From<GraphicsError> for SimulatorError {
+    fn from(error: GraphicsError) -> Self {
+        Self::Graphics(error)
+    }
+}
+
+impl From<std::io::Error> for SimulatorError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+pub struct SimulatorDisplay {
+    capabilities: DisplayCapabilities,
+    frame: Framebuffer,
+    updates: Vec<(Rect, Waveform)>,
+    sleeping: bool,
+}
+
+impl SimulatorDisplay {
+    pub fn new(size: Size) -> Result<Self, SimulatorError> {
+        Ok(Self {
+            capabilities: DisplayCapabilities {
+                native_size: size,
+                supported_formats: FORMATS,
+                supported_waveforms: WAVEFORMS,
+                partial_updates: true,
+                fast_monochrome_constraints: UpdateConstraints::UNRESTRICTED,
+            },
+            frame: Framebuffer::new(size, Gray8::WHITE)?,
+            updates: Vec::new(),
+            sleeping: false,
+        })
+    }
+
+    pub const fn frame(&self) -> &Framebuffer {
+        &self.frame
+    }
+
+    pub fn updates(&self) -> &[(Rect, Waveform)] {
+        &self.updates
+    }
+
+    pub const fn is_sleeping(&self) -> bool {
+        self.sleeping
+    }
+
+    /// Writes a dependency-free PGM preview. This is a host artifact only.
+    pub fn write_pgm(&self, path: impl AsRef<Path>) -> Result<(), SimulatorError> {
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let header = format!(
+            "P5\n{} {}\n255\n",
+            self.frame.size().width,
+            self.frame.size().height
+        );
+        let mut output = Vec::with_capacity(header.len() + self.frame.pixels().len());
+        output.extend_from_slice(header.as_bytes());
+        output.extend_from_slice(self.frame.pixels());
+        fs::write(path, output)?;
+        Ok(())
+    }
+}
+
+impl Display for SimulatorDisplay {
+    type Error = SimulatorError;
+
+    fn capabilities(&self) -> &DisplayCapabilities {
+        &self.capabilities
+    }
+
+    fn update(&mut self, request: UpdateRequest<'_>) -> Result<(), Self::Error> {
+        if request.pixel_format != PixelFormat::Gray8 {
+            return Err(SimulatorError::UnsupportedPixelFormat(request.pixel_format));
+        }
+        if request
+            .region
+            .intersection(Rect::from_size(self.capabilities.native_size))
+            != Some(request.region)
+        {
+            return Err(SimulatorError::InvalidRegion);
+        }
+        let required = request
+            .stride_bytes
+            .saturating_mul(request.region.size.height as usize);
+        if request.pixels.len() < required
+            || request.stride_bytes < request.region.size.width as usize
+        {
+            return Err(SimulatorError::BufferTooShort);
+        }
+
+        for row in 0..request.region.size.height as usize {
+            let source_start = row * request.stride_bytes;
+            let source_end = source_start + request.region.size.width as usize;
+            let y = request.region.origin.y as usize + row;
+            let destination_start =
+                y * self.frame.stride_bytes() + request.region.origin.x as usize;
+            let destination_end = destination_start + request.region.size.width as usize;
+            self.frame.pixels_mut()[destination_start..destination_end]
+                .copy_from_slice(&request.pixels[source_start..source_end]);
+        }
+
+        self.updates.push((request.region, request.waveform));
+        Ok(())
+    }
+
+    fn sleep(&mut self) -> Result<(), Self::Error> {
+        self.sleeping = true;
+        Ok(())
+    }
+
+    fn wake(&mut self) -> Result<(), Self::Error> {
+        self.sleeping = false;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use paper_display::{Display, PixelFormat, Rect, Size, UpdateRequest, Waveform};
+
+    use super::SimulatorDisplay;
+
+    #[test]
+    fn partial_update_changes_only_requested_region() {
+        let mut display = SimulatorDisplay::new(Size::new(4, 3)).unwrap();
+        display
+            .update(UpdateRequest {
+                region: Rect::new(1, 1, 2, 1),
+                pixel_format: PixelFormat::Gray8,
+                stride_bytes: 2,
+                pixels: &[0, 127],
+                waveform: Waveform::Grayscale,
+            })
+            .unwrap();
+
+        assert_eq!(
+            display.frame().pixels(),
+            &[255, 255, 255, 255, 255, 0, 127, 255, 255, 255, 255, 255]
+        );
+    }
+}

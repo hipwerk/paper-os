@@ -1,0 +1,15 @@
+/target/
+/.idea/
+/.vscode/*
+!/.vscode/extensions.json
+.DS_Store
+*.swp
+*.swo
+*.profraw
+*.profdata
+coverage/
+artifacts/
+.env
+.env.*
+!.env.example
+hardware/panels.local.toml

@@ -1,0 +1,17 @@
+[package]
+name = "paper-ui"
+description = "Declarative scene and widget API for PaperOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+paper-display.workspace = true
+paper-graphics.workspace = true
+paper-layout.workspace = true
+paper-text.workspace = true
+
+[lints]
+workspace = true

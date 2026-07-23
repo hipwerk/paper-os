@@ -1,0 +1,14 @@
+[files]
+extend-exclude = [
+    "Cargo.lock",
+    "artifacts/",
+    "target/",
+]
+
+[default.extend-words]
+bpp = "bpp"
+GC16 = "GC16"
+IT8951 = "IT8951"
+M641 = "M641"
+rustup = "rustup"
+VCOM = "VCOM"

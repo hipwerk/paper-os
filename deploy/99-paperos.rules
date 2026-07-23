@@ -1,0 +1,3 @@
+# Review chip ownership and group names on the target Pi before installation.
+SUBSYSTEM=="spidev", KERNEL=="spidev*", GROUP="paperos", MODE="0660"
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", GROUP="paperos", MODE="0660"

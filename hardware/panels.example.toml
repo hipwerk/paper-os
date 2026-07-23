@@ -1,0 +1,16 @@
+# Copy to panels.local.toml. The local file is ignored by Git.
+
+[[panel]]
+name = "desk-6in-hd"
+controller = "it8951"
+width = 1448
+height = 1072
+
+# Positive magnitude of the negative VCOM printed on this exact panel's FPC.
+vcom_mv = 0 # deliberately invalid until replaced
+
+spi_device = "/dev/spidev0.0"
+gpio_chip = "/dev/gpiochip0"
+reset_line = 17
+ready_line = 24
+max_spi_hz = 1_000_000

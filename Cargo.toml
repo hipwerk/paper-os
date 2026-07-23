@@ -1,0 +1,59 @@
+[workspace]
+members = [
+    "apps/daily",
+    "crates/paper-assets",
+    "crates/paper-display",
+    "crates/paper-graphics",
+    "crates/paper-it8951",
+    "crates/paper-layout",
+    "crates/paper-runtime",
+    "crates/paper-simulator",
+    "crates/paper-text",
+    "crates/paper-ui",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+authors = ["PaperOS contributors"]
+repository = "https://github.com/hipwerk/paper-os"
+
+[workspace.dependencies]
+paper-assets = { path = "crates/paper-assets" }
+paper-display = { path = "crates/paper-display" }
+paper-graphics = { path = "crates/paper-graphics" }
+paper-it8951 = { path = "crates/paper-it8951" }
+paper-layout = { path = "crates/paper-layout" }
+paper-runtime = { path = "crates/paper-runtime" }
+paper-simulator = { path = "crates/paper-simulator" }
+paper-text = { path = "crates/paper-text" }
+paper-ui = { path = "crates/paper-ui" }
+
+proptest = "1.7.0"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

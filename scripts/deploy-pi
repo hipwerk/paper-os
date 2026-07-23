@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PAPEROS_PI_HOST:?set PAPEROS_PI_HOST to the Pi hostname or SSH alias}"
+: "${PAPEROS_PI_USER:?set PAPEROS_PI_USER to an SSH user with sudo access}"
+
+paperos_target="${PAPEROS_TARGET:-aarch64-unknown-linux-gnu}"
+paperos_remote="${PAPEROS_PI_USER}@${PAPEROS_PI_HOST}"
+paperos_binary="target/${paperos_target}/release/daily"
+
+if ! cargo zigbuild --version >/dev/null 2>&1; then
+    echo "cargo-zigbuild is required; run: cargo install --locked cargo-zigbuild" >&2
+    exit 1
+fi
+
+cargo zigbuild --locked --release --target "${paperos_target}" -p daily
+scp "${paperos_binary}" "${paperos_remote}:/tmp/paperos-daily"
+ssh "${paperos_remote}" \
+    "sudo install -D -m 0755 /tmp/paperos-daily /opt/paperos/bin/daily && rm /tmp/paperos-daily"
+
+echo "Installed /opt/paperos/bin/daily on ${PAPEROS_PI_HOST}."
+echo "This is an architecture smoke-test binary; it does not access the panel."

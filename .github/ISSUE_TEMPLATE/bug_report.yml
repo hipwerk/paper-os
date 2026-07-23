@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible PaperOS defect
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, configuration with secrets removed, and commit.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, target, and—if relevant—named panel profile, firmware/LUT, mode, and temperature.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Hardware safety
+      options:
+        - label: I have removed VCOM values, credentials, and other local secrets.
+          required: true
