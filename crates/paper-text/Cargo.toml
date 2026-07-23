@@ -8,6 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cosmic-text.workspace = true
 paper-display.workspace = true
 
 [lints]

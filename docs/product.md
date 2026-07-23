@@ -61,9 +61,11 @@ maps it to supported controller operations and may reject an illegal plan.
 
 ### Display capabilities are richer than width and height
 
-Capabilities include pixel formats, waveform families, partial-update support,
-alignment, addressable regions, power behavior, and eventually temperature and
-color planes. A backend discovered at runtime is the authority.
+Capabilities advertise legal operation profiles that pair pixel format,
+waveform, partial-update support, and alignment instead of independent lists.
+They will also include addressable regions, power behavior, and eventually
+temperature and color planes. A backend discovered at runtime is the authority;
+unknown firmware fails closed rather than inheriting a guessed fast mode.
 
 ### Interactivity should be admitted without dominating v1
 
@@ -84,7 +86,8 @@ profile separately.
 The first convincing slice is not a collection of placeholder widgets. It is:
 
 1. a desktop preview and deterministic golden render;
-2. shaped, wrapped, anti-aliased text using a bundled licensed font;
+2. shaped, wrapped, anti-aliased text using the cosmic-text backend and a bundled
+   licensed font;
 3. one declarative page laid out through `paper-ui`;
 4. a diff and legal refresh plan;
 5. the same pixels on the Waveshare 6-inch HD panel;

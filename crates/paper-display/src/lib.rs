@@ -1,3 +1,5 @@
+//! Controller-agnostic display geometry, capabilities, and update contract.
+
 #![no_std]
 
 use core::fmt::Debug;
@@ -5,19 +7,24 @@ use core::fmt::Debug;
 /// A two-dimensional size in physical pixels.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
+    /// Width in physical pixels.
     pub width: u32,
+    /// Height in physical pixels.
     pub height: u32,
 }
 
 impl Size {
+    /// Creates a physical pixel size.
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
 
+    /// Returns whether either dimension is zero.
     pub const fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
 
+    /// Returns the pixel count when multiplication fits the geometry model.
     pub const fn pixel_count(self) -> Option<usize> {
         match self.width.checked_mul(self.height) {
             Some(value) => Some(value as usize),
@@ -29,11 +36,14 @@ impl Size {
 /// A point in physical pixel coordinates.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Point {
+    /// Horizontal coordinate.
     pub x: u32,
+    /// Vertical coordinate.
     pub y: u32,
 }
 
 impl Point {
+    /// Creates a physical pixel coordinate.
     pub const fn new(x: u32, y: u32) -> Self {
         Self { x, y }
     }
@@ -42,11 +52,14 @@ impl Point {
 /// A half-open rectangle: `[x, x + width) × [y, y + height)`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rect {
+    /// Top-left physical coordinate.
     pub origin: Point,
+    /// Physical dimensions.
     pub size: Size,
 }
 
 impl Rect {
+    /// Creates a physical half-open rectangle.
     pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
         Self {
             origin: Point::new(x, y),
@@ -54,22 +67,27 @@ impl Rect {
         }
     }
 
+    /// Creates a rectangle at the origin with the provided size.
     pub const fn from_size(size: Size) -> Self {
         Self::new(0, 0, size.width, size.height)
     }
 
+    /// Returns whether either dimension is zero.
     pub const fn is_empty(self) -> bool {
         self.size.is_empty()
     }
 
+    /// Returns the exclusive right coordinate, saturating on invalid geometry.
     pub const fn right(self) -> u32 {
         self.origin.x.saturating_add(self.size.width)
     }
 
+    /// Returns the exclusive bottom coordinate, saturating on invalid geometry.
     pub const fn bottom(self) -> u32 {
         self.origin.y.saturating_add(self.size.height)
     }
 
+    /// Returns whether a point falls within this half-open rectangle.
     pub const fn contains(self, point: Point) -> bool {
         point.x >= self.origin.x
             && point.y >= self.origin.y
@@ -77,6 +95,7 @@ impl Rect {
             && point.y < self.bottom()
     }
 
+    /// Returns the non-empty overlap between two rectangles.
     pub fn intersection(self, other: Self) -> Option<Self> {
         let x = self.origin.x.max(other.origin.x);
         let y = self.origin.y.max(other.origin.y);
@@ -87,6 +106,7 @@ impl Rect {
     }
 
     #[must_use]
+    /// Returns the smallest rectangle containing both inputs.
     pub fn union(self, other: Self) -> Self {
         if self.is_empty() {
             return other;
@@ -106,13 +126,18 @@ impl Rect {
 /// Pixel encodings accepted at the display boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PixelFormat {
+    /// One packed bit per pixel.
     Monochrome1,
+    /// Two packed bits per pixel.
     Gray2,
+    /// Four packed bits per pixel.
     Gray4,
+    /// One byte per grayscale pixel.
     Gray8,
 }
 
 impl PixelFormat {
+    /// Returns the packed bit depth.
     pub const fn bits_per_pixel(self) -> u8 {
         match self {
             Self::Monochrome1 => 1,
@@ -132,52 +157,84 @@ pub enum Waveform {
     Grayscale,
     /// Fast black/white update; ghosting is expected to accumulate.
     FastMonochrome,
-    /// A backend-specific waveform requested by an expert caller.
-    ControllerSpecific(u16),
 }
 
 /// Physical panel rotation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Rotation {
+    /// Native orientation.
     #[default]
     Degrees0,
+    /// Ninety degrees clockwise.
     Degrees90,
+    /// One hundred eighty degrees.
     Degrees180,
+    /// Two hundred seventy degrees clockwise.
     Degrees270,
 }
 
 /// Region restrictions for a format/waveform combination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UpdateConstraints {
-    pub x_alignment: u32,
-    pub y_alignment: u32,
-    pub width_alignment: u32,
-    pub height_alignment: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 impl UpdateConstraints {
-    pub const UNRESTRICTED: Self = Self::new(1, 1, 1, 1);
+    /// Constraints accepting any integer-pixel region.
+    pub const UNRESTRICTED: Self = Self {
+        x: 1,
+        y: 1,
+        width: 1,
+        height: 1,
+    };
 
+    /// Creates non-zero alignment constraints.
     pub const fn new(
         x_alignment: u32,
         y_alignment: u32,
         width_alignment: u32,
         height_alignment: u32,
-    ) -> Self {
-        Self {
-            x_alignment,
-            y_alignment,
-            width_alignment,
-            height_alignment,
+    ) -> Option<Self> {
+        if x_alignment == 0 || y_alignment == 0 || width_alignment == 0 || height_alignment == 0 {
+            return None;
         }
+        Some(Self {
+            x: x_alignment,
+            y: y_alignment,
+            width: width_alignment,
+            height: height_alignment,
+        })
+    }
+
+    /// Returns the required alignment for the region's X origin.
+    pub const fn x_alignment(self) -> u32 {
+        self.x
+    }
+
+    /// Returns the required alignment for the region's Y origin.
+    pub const fn y_alignment(self) -> u32 {
+        self.y
+    }
+
+    /// Returns the required alignment for the region width.
+    pub const fn width_alignment(self) -> u32 {
+        self.width
+    }
+
+    /// Returns the required alignment for the region height.
+    pub const fn height_alignment(self) -> u32 {
+        self.height
     }
 
     /// Expands a region outward to legal boundaries, clipped to the panel.
     pub fn align_region(self, region: Rect, panel: Size) -> Rect {
-        let x_alignment = self.x_alignment.max(1);
-        let y_alignment = self.y_alignment.max(1);
-        let width_alignment = self.width_alignment.max(1);
-        let height_alignment = self.height_alignment.max(1);
+        let x_alignment = self.x;
+        let y_alignment = self.y;
+        let width_alignment = self.width;
+        let height_alignment = self.height;
 
         let x = region.origin.x - (region.origin.x % x_alignment);
         let y = region.origin.y - (region.origin.y % y_alignment);
@@ -206,23 +263,85 @@ const fn align_up(value: u32, alignment: u32) -> u32 {
     }
 }
 
+/// One legal format/waveform operation advertised by a display backend.
+///
+/// Formats and waveforms are intentionally paired: a backend must not imply
+/// that every supported format can be used with every supported waveform.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UpdateProfile {
+    pixel_format: PixelFormat,
+    waveform: Waveform,
+    partial_updates: bool,
+    constraints: UpdateConstraints,
+}
+
+impl UpdateProfile {
+    /// Creates one legal update operation.
+    pub const fn new(
+        pixel_format: PixelFormat,
+        waveform: Waveform,
+        partial_updates: bool,
+        constraints: UpdateConstraints,
+    ) -> Self {
+        Self {
+            pixel_format,
+            waveform,
+            partial_updates,
+            constraints,
+        }
+    }
+
+    /// Returns the controller-bound pixel encoding.
+    pub const fn pixel_format(self) -> PixelFormat {
+        self.pixel_format
+    }
+
+    /// Returns the semantic waveform intent.
+    pub const fn waveform(self) -> Waveform {
+        self.waveform
+    }
+
+    /// Returns whether this operation may target less than the complete panel.
+    pub const fn supports_partial(self) -> bool {
+        self.partial_updates
+    }
+
+    /// Returns the legal region alignment for partial updates.
+    pub const fn constraints(self) -> UpdateConstraints {
+        self.constraints
+    }
+}
+
 /// Immutable capabilities discovered from a display/controller pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DisplayCapabilities {
+    /// Native addressable panel size.
     pub native_size: Size,
-    pub supported_formats: &'static [PixelFormat],
-    pub supported_waveforms: &'static [Waveform],
-    pub partial_updates: bool,
-    pub fast_monochrome_constraints: UpdateConstraints,
+    /// Legal update operations. Each entry is one complete supported tuple.
+    pub update_profiles: &'static [UpdateProfile],
+}
+
+impl DisplayCapabilities {
+    /// Returns the exact advertised operation, if supported.
+    pub fn profile(&self, pixel_format: PixelFormat, waveform: Waveform) -> Option<UpdateProfile> {
+        self.update_profiles.iter().copied().find(|profile| {
+            profile.pixel_format() == pixel_format && profile.waveform() == waveform
+        })
+    }
 }
 
 /// One intentional display update.
 #[derive(Clone, Copy, Debug)]
 pub struct UpdateRequest<'a> {
+    /// Physical target region.
     pub region: Rect,
+    /// Encoding of `pixels`.
     pub pixel_format: PixelFormat,
+    /// Source bytes between successive rows.
     pub stride_bytes: usize,
+    /// Source rows beginning at the request region's top-left pixel.
     pub pixels: &'a [u8],
+    /// Semantic waveform requested for the physical transition.
     pub waveform: Waveform,
 }
 
@@ -231,20 +350,42 @@ pub struct UpdateRequest<'a> {
 /// Implementations own upload, refresh completion, and power-state details.
 /// The runtime owns policy: deciding *when* and *what* to update.
 pub trait Display {
+    /// Backend-specific structured failure.
     type Error: Debug;
 
+    /// Returns immutable, probed backend capabilities.
     fn capabilities(&self) -> &DisplayCapabilities;
 
+    /// Uploads and completes one validated physical refresh.
     fn update(&mut self, request: UpdateRequest<'_>) -> Result<(), Self::Error>;
 
+    /// Puts the controller into its low-power sleep state.
     fn sleep(&mut self) -> Result<(), Self::Error>;
 
+    /// Wakes the controller for subsequent explicit operations.
     fn wake(&mut self) -> Result<(), Self::Error>;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, Size, UpdateConstraints};
+    use super::{
+        DisplayCapabilities, PixelFormat, Rect, Size, UpdateConstraints, UpdateProfile, Waveform,
+    };
+
+    const PROFILES: &[UpdateProfile] = &[
+        UpdateProfile::new(
+            PixelFormat::Gray8,
+            Waveform::Grayscale,
+            true,
+            UpdateConstraints::UNRESTRICTED,
+        ),
+        UpdateProfile::new(
+            PixelFormat::Monochrome1,
+            Waveform::FastMonochrome,
+            true,
+            UpdateConstraints::new(32, 1, 32, 1).expect("test profile alignments are non-zero"),
+        ),
+    ];
 
     #[test]
     fn intersection_uses_half_open_coordinates() {
@@ -257,9 +398,13 @@ mod tests {
 
     #[test]
     fn aligns_fast_update_outward_and_clips_to_panel() {
-        let constraints = UpdateConstraints::new(32, 1, 32, 1);
+        let constraints = UpdateConstraints::new(32, 1, 32, 1).unwrap();
         let panel = Size::new(1448, 1072);
 
+        assert_eq!(constraints.x_alignment(), 32);
+        assert_eq!(constraints.y_alignment(), 1);
+        assert_eq!(constraints.width_alignment(), 32);
+        assert_eq!(constraints.height_alignment(), 1);
         assert_eq!(
             constraints.align_region(Rect::new(31, 10, 40, 20), panel),
             Rect::new(0, 10, 96, 20)
@@ -267,6 +412,33 @@ mod tests {
         assert_eq!(
             constraints.align_region(Rect::new(1440, 10, 8, 20), panel),
             Rect::new(1440, 10, 0, 20)
+        );
+    }
+
+    #[test]
+    fn zero_alignment_is_rejected_instead_of_becoming_unrestricted() {
+        assert_eq!(UpdateConstraints::new(0, 1, 1, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 0, 1, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 1, 0, 1), None);
+        assert_eq!(UpdateConstraints::new(1, 1, 1, 0), None);
+    }
+
+    #[test]
+    fn capabilities_match_complete_operation_profiles() {
+        let capabilities = DisplayCapabilities {
+            native_size: Size::new(1448, 1072),
+            update_profiles: PROFILES,
+        };
+
+        assert!(
+            capabilities
+                .profile(PixelFormat::Gray8, Waveform::Grayscale)
+                .is_some()
+        );
+        assert!(
+            capabilities
+                .profile(PixelFormat::Gray8, Waveform::FastMonochrome)
+                .is_none()
         );
     }
 }

@@ -22,6 +22,7 @@ authors = ["PaperOS contributors"]
 repository = "https://github.com/hipwerk/paper-os"
 
 [workspace.dependencies]
+cosmic-text = { version = "0.19.0", default-features = false, features = ["fontconfig", "std", "swash"] }
 paper-assets = { path = "crates/paper-assets" }
 paper-display = { path = "crates/paper-display" }
 paper-graphics = { path = "crates/paper-graphics" }
@@ -35,6 +36,7 @@ paper-ui = { path = "crates/paper-ui" }
 proptest = "1.7.0"
 
 [workspace.lints.rust]
+missing_docs = "warn"
 rust_2018_idioms = { level = "deny", priority = -1 }
 unsafe_code = "forbid"
 unreachable_pub = "warn"

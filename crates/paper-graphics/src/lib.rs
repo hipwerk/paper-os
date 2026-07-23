@@ -1,3 +1,5 @@
+//! Deterministic Gray8 framebuffer storage and drawing primitives.
+
 use core::fmt;
 
 use paper_display::{Point, Rect, Size};
@@ -7,14 +9,24 @@ use paper_display::{Point, Rect, Size};
 pub struct Gray8(pub u8);
 
 impl Gray8 {
+    /// Fully black ink.
     pub const BLACK: Self = Self(0);
+    /// Fully white background.
     pub const WHITE: Self = Self(255);
 }
 
+/// Framebuffer construction failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphicsError {
+    /// Dimensions are empty or their pixel count overflows.
     InvalidSize(Size),
-    BufferLength { expected: usize, actual: usize },
+    /// A provided pixel vector does not match the framebuffer dimensions.
+    BufferLength {
+        /// Required number of Gray8 pixels.
+        expected: usize,
+        /// Supplied number of Gray8 pixels.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for GraphicsError {
@@ -45,6 +57,7 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
+    /// Allocates a framebuffer filled with `background`.
     pub fn new(size: Size, background: Gray8) -> Result<Self, GraphicsError> {
         let len = size
             .pixel_count()
@@ -57,6 +70,7 @@ impl Framebuffer {
         })
     }
 
+    /// Wraps an exactly sized Gray8 pixel vector.
     pub fn from_pixels(size: Size, pixels: Vec<u8>) -> Result<Self, GraphicsError> {
         let expected = size
             .pixel_count()
@@ -72,26 +86,32 @@ impl Framebuffer {
         Ok(Self { size, pixels })
     }
 
+    /// Returns physical framebuffer dimensions.
     pub const fn size(&self) -> Size {
         self.size
     }
 
+    /// Returns the byte distance between rows.
     pub const fn stride_bytes(&self) -> usize {
         self.size.width as usize
     }
 
+    /// Returns immutable canonical Gray8 pixels in row-major order.
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
 
+    /// Returns mutable canonical Gray8 pixels in row-major order.
     pub fn pixels_mut(&mut self) -> &mut [u8] {
         &mut self.pixels
     }
 
+    /// Fills the complete framebuffer.
     pub fn clear(&mut self, color: Gray8) {
         self.pixels.fill(color.0);
     }
 
+    /// Returns one pixel or `None` outside the framebuffer.
     pub fn get(&self, point: Point) -> Option<Gray8> {
         self.index(point).map(|index| Gray8(self.pixels[index]))
     }
@@ -119,6 +139,7 @@ impl Framebuffer {
         }
     }
 
+    /// Draws an inward rectangular stroke, clipped to the framebuffer.
     pub fn stroke_rect(&mut self, rect: Rect, width: u32, color: Gray8) {
         if width == 0 || rect.is_empty() {
             return;

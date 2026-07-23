@@ -12,3 +12,12 @@ releasing.
   layout and graphics primitives, and portable IT8951 protocol core.
 - CI, dependency policy, Raspberry Pi deployment guidance, and hardware lab
   safety documentation.
+- Validated logical layout, real cosmic-text shaping/rasterization, pure
+  commit-on-success refresh planning, fail-closed LUT capabilities, explicit
+  VCOM mutation, and atomic content-addressed Pi deployment.
+- Explicit scale/text widget context, bounded text coverage, transactional
+  framebuffer refresh commits, legal update profiles, verified VCOM readback,
+  and locked CI dependency resolution.
+- Safe uncertain-state cold starts, explicit refresh-history restoration,
+  validated non-zero update alignment, isolated deployment environment loading,
+  and reconciled contributor/hardware guidance.

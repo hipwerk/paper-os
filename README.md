@@ -11,22 +11,30 @@ a hardware backend.
 > SwiftUI for E Ink, with the sensibility of designing a printed page.
 
 The repository is at foundation stage. Geometry, grayscale framebuffer drawing,
-layout primitives, refresh planning, an IT8951 protocol core, a simulator, and a
-reference app compile and are tested. Text shaping and real panel upload are the
-next vertical slice; the current `daily` output is intentionally a placeholder.
+bounded layout, a `cosmic-text` shaping/raster boundary, safe refresh planning,
+an IT8951 protocol core, a simulator, and a reference app compile and are tested.
+Scene rasterization and real panel upload are the next vertical slices; the
+current `daily` output is intentionally a placeholder.
 
 ## Start here
 
-Prerequisites are macOS or Linux, [asdf](https://asdf-vm.com/) 0.16 or newer,
-and Git. The repository pins Rust 1.97.1 in both `.tool-versions` and
-`rust-toolchain.toml`; asdf selects the installation and rustup supplies Rust
-components and cross targets.
+Prerequisites are macOS or Linux, Git, and
+[rustup](https://rustup.rs/). `rust-toolchain.toml` installs the pinned compiler,
+components, and cross targets automatically:
 
 ```sh
-asdf install
 rustup show
-cargo test --workspace --all-targets --all-features
+cargo test --locked --workspace --all-targets --all-features
 cargo run -p daily -- artifacts/daily.pgm
+```
+
+Hipwerk developers may instead use [asdf](https://asdf-vm.com/) 0.16 or newer.
+Install its Rust plugin once, then the checked-in `.tool-versions` selects the
+same rustup-managed toolchain:
+
+```sh
+asdf plugin add rust https://github.com/code-lever/asdf-rust.git
+asdf install
 ```
 
 Open the generated PGM in Preview, ImageMagick, or another image viewer.
@@ -58,13 +66,17 @@ and physical-panel work starts in [deployment](docs/deployment.md) and the
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
+cargo metadata --locked --no-deps --format-version 1
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
+cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu
+cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
 cargo deny check
 typos
 actionlint
+shellcheck scripts/*
+cargo llvm-cov --locked --workspace --all-features --summary-only --fail-under-lines 75
 ```
 
 Physical display tests are never part of the default test suite. They require a

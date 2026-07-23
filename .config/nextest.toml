@@ -4,6 +4,6 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 
 [profile.ci]
 fail-fast = false
-retries = 2
+retries = 0
 status-level = "fail"
 final-status-level = "slow"

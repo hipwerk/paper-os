@@ -32,9 +32,11 @@ export PAPEROS_PI_USER=<ssh-user>
 ```
 
 `cargo-zigbuild` supplies the Linux linker/sysroot that `rustup target add`
-alone does not provide. The deployment script uploads to a temporary path and
-uses `install` for an atomic replacement. It currently installs the simulator
-Daily binary for architecture smoke testing; it does not touch a panel.
+alone does not provide. The deployment script obtains a remote `mktemp` path,
+installs a content-addressed binary under `/opt/paperos/releases/`, and
+atomically replaces `/opt/paperos/bin/daily` with a relative symlink. It
+currently deploys the simulator Daily binary for architecture smoke testing; it
+does not touch a panel.
 
 ## Pi host preparation
 

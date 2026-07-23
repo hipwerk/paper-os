@@ -8,8 +8,13 @@ documented, and demonstrated at its lowest real boundary.
 - Rust 1.97.1 workspace with Edition 2024 and resolver 3
 - Requested platform crates plus simulator and Daily reference app
 - Geometry, Gray8 framebuffer, linear layout, scene model
-- Bounding-box diff and conservative refresh planner
-- Typed VCOM, IT8951 device probe, LUT-specific A2 mapping
+- Validated constraints, rational logical scaling, exact fit/shrink layout
+- Transactional bounding-box diff/runtime with opaque success commit
+- `cosmic-text` shaping/rasterization backend boundary
+- Scale- and typography-aware widget render context
+- Legal format/waveform update profiles and conservative Gray8 simulator
+- Bounded text coverage with empty-region handling
+- Non-mutating IT8951 probe, verified typed VCOM write, fail-closed LUT mapping
 - Unit/property tests, CI, dependency policy, agent guidance
 - Pi deployment and Waveshare lab plan
 
@@ -28,10 +33,10 @@ Waveshare C demo, VCOM is verified, and failures time out safely.
 
 ## Slice 2: typography and preview
 
-- `cosmic-text` backend behind `paper-text`
+- integrate the existing `cosmic-text` backend into the scene-to-Gray8 renderer
 - Bundled OFL-licensed variable/static font fixtures with license manifest
 - paragraph shaping, bidi, kerning, ligatures, wrapping, and ellipsis
-- grayscale glyph rasterization into `paper-graphics`
+- grayscale glyph composition and scene clipping in `paper-graphics`
 - deterministic golden pages in CI
 - desktop preview with panel size, rotation, and pixel-density profiles
 
@@ -42,7 +47,7 @@ resembles print on the panel.
 
 - Padding, Align, Row, Column, Stack, Spacer, Overlay
 - typed spacing/type/color theme tokens
-- scene rasterizer and clipping
+- nested widget layout through the explicit render context
 - Daily page implemented through `paper-ui`, not direct framebuffer calls
 
 Exit gate: Daily renders the same accepted page in simulator and hardware.
