@@ -39,7 +39,7 @@ and future hardware backends where the target has sufficient capabilities.
 
 ### “Runs unchanged” means source portability, not identical execution
 
-A Raspberry Pi can retain a 1.55 MiB Gray8 frame for the 1448×1072 panel. Many
+A Raspberry Pi can retain a 1.48 MiB Gray8 frame for the 1448×1072 panel. Many
 MCUs cannot, and the Waveshare guidance itself uses external SDRAM for STM32.
 MCU support will require tiled rendering, controller RAM, reduced features, or
 external memory. Application APIs should remain portable, while build features
