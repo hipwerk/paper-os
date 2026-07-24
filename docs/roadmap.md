@@ -18,20 +18,31 @@ documented, and demonstrated at its lowest real boundary.
 - Unit/property tests, CI, dependency policy, agent guidance
 - Pi deployment and Waveshare lab plan
 
-## Slice 1: pixels on glass — implementation complete, lab evidence pending
+## Slice 1: pixels on glass — complete
 
 - Implemented: Linux `/dev/spidev*` plus GPIO-v2 manual-CS host adapter
 - Implemented: ready/reset timing and a shared HRDY/display deadline
 - Implemented: named-profile probe reporting size, memory, firmware, LUT, VCOM
-- Implemented: packed-Gray4 full upload and explicit-buffer INIT/GC16 refresh
-- Implemented: white INIT, sleeping observation, reinitialized cleanup, signals
+- Implemented: streamed packed-Gray4 full upload and explicit-buffer INIT/GC16
+  refresh
+- Implemented: verified Gray4 boundary packing and diagnostic packing stripe
+- Implemented: pinned refresh identity, guarded session VCOM application,
+  bounded SPI profile, and address validation
+- Implemented: white INIT, sleeping observation, reinitialized VCOM-verified
+  cleanup
 - Implemented: protocol and host fake-transport tests
-- Remaining: lab report from the named 6-inch HD panel
+- Verified: the unchanged Waveshare demo renders correctly after correcting the
+  reversed panel FPC
+- Verified: PaperOS's streamed Gray4 upload, explicit-buffer GC16 refresh,
+  packing diagnostic, edge border, 16-level ramp, and white cleanup on glass
+- Recorded: [controller bring-up, wiring diagnosis, vendor baseline, and
+  PaperOS calibration](lab/2026-07-23-waveshare-6in-hd-bring-up.md)
 
 Exit gate: a generated calibration page reaches the physical panel without the
 Waveshare C demo, VCOM is verified, and failures time out safely.
 
-The exit gate is not met until the physical result is observed and recorded.
+The exit gate was met on the named 6-inch fixture with release
+`c5fadfbd1b7c8e99`.
 
 ## Slice 2: typography and preview
 

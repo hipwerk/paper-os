@@ -55,7 +55,8 @@ touch the panel.
 5. Install `deploy/99-paperos.rules` only after reviewing device ownership.
 6. Keep physical panel settings, including exact VCOM, in the named
    `hardware/panels.local.toml` profile. It is the sole diagnostic hardware
-   configuration authority.
+   configuration authority. Keep SPI at 1 MHz for initial bring-up; validation
+   caps it at the audited Waveshare rate of 12.5 MHz.
 7. Install the eventual daemon under `/opt/paperos/bin/` and writable state under
    `/var/lib/paperos/`.
 
@@ -75,17 +76,34 @@ cargo run --release -p paperos-hardware -- \
   --allow-hardware
 
 cargo run --release -p paperos-hardware -- \
+  set-vcom --config hardware/panels.local.toml --profile desk-6in-hd \
+  --allow-hardware \
+  --allow-vcom-write
+
+cargo run --release -p paperos-hardware -- \
   calibrate --config hardware/panels.local.toml --profile desk-6in-hd \
-  --allow-hardware --allow-refresh
+  --allow-hardware \
+  --allow-vcom-write \
+  --allow-refresh
 ```
 
-`probe` resets, wakes, reads identity and VCOM, verifies them against the named
-profile, and sleeps. `calibrate` additionally performs white INIT, a packed
-Gray4 GC16 test page, sleeps the controller during the bounded observation
-interval, resets/reprobes/revalidates identity and VCOM, performs white INIT
-cleanup, and sleeps again. `SIGINT`/`SIGTERM` request graceful sleep; an
-interruption while already sleeping leaves the diagnostic page visible. Neither
-command writes VCOM. Any profile/probe mismatch aborts before a refresh.
+`probe` resets, wakes, reads identity and VCOM, verifies controller identity
+against the named profile, reports the current VCOM, and sleeps. A different
+boot VCOM is informational rather than a probe failure. The first probe may
+omit `expected_firmware` and `expected_lut`; copy its exact output into those
+local fields before any mutation or refresh.
+
+Some IT8951 HATs restore a controller boot VCOM after every reset. That value is
+observed and logged, never used as a panel target. The write target always comes
+from the exact panel FPC value in the named profile. `set-vcom` tests the
+session-scoped mutation and verified readback, then sleeps; it does not
+configure a later process because its reset may restore the boot value.
+`calibrate` refuses unpinned identity or missing VCOM/refresh opt-ins. In each
+refresh session it resets, verifies identity, applies the profile VCOM when
+needed, verifies readback, and only then refreshes. It repeats that sequence
+after the observation sleep before white cleanup. Any identity or readback
+mismatch aborts before a refresh. `SIGHUP`/`SIGINT`/`SIGTERM` request graceful
+sleep, and an armed scope guard attempts sleep on unexpected early return.
 
 ## Service design
 

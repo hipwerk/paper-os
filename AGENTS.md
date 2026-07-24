@@ -58,6 +58,9 @@ linked document by default.
   keep every HRDY/display wait under a shared monotonic deadline.
 - IT8951 deep sleep requires reset, reprobe, identity verification, and VCOM
   verification before another update.
+- Keep PaperOS packed pixels MSB-first. IT8951 Gray4 nibble reversal belongs
+  only in its display adapter. A physical refresh requires pinned firmware/LUT
+  identity and an SPI profile no faster than the audited 12.5 MHz ceiling.
 - Do not commit fonts, photos, books, API keys, `.env` files, panel-local
   profiles, or other assets unless their license and provenance are documented.
 

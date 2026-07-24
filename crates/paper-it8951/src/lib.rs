@@ -217,6 +217,16 @@ fn words_to_bytes(words: &[u16], bytes: &mut [u8]) {
     }
 }
 
+/// Converts four PaperOS Gray4 pixels into the IT8951 packed-write word.
+///
+/// PaperOS stores pixels from the most-significant nibble of each byte, while
+/// the IT8951 little-endian packed format numbers the first pixel from the
+/// least-significant nibble of the 16-bit word. For source bytes `01 23`, the
+/// controller word is therefore `3210`.
+const fn controller_gray4_word(first: u8, second: u8) -> u16 {
+    u16::from_le_bytes([first.rotate_left(4), second.rotate_left(4)])
+}
+
 /// Lowest common protocol operations, implemented by Linux SPI or an MCU HAL.
 ///
 /// Each method represents one complete IT8951 transaction, including its
@@ -299,6 +309,8 @@ pub enum Error<E> {
     Transport(E),
     /// The controller returned an empty panel size.
     InvalidDeviceInfo,
+    /// The controller returned an unusable image-buffer base address.
+    InvalidImageBufferAddress(u32),
     /// The controller returned a zero or implausible VCOM magnitude.
     InvalidVcomResponse,
     /// The display engine remained busy for the complete configured budget.
@@ -312,7 +324,7 @@ pub enum Error<E> {
     },
     /// The update was rejected before upload or refresh.
     InvalidUpdate(UpdateError),
-    /// A VCOM write completed at the transport layer but did not persist.
+    /// A VCOM write completed at the transport layer but readback did not match.
     VcomMismatch {
         /// Requested positive magnitude.
         requested: VcomMillivolts,
@@ -326,6 +338,10 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
         match self {
             Self::Transport(error) => write!(formatter, "IT8951 transport error: {error}"),
             Self::InvalidDeviceInfo => formatter.write_str("IT8951 returned an invalid panel size"),
+            Self::InvalidImageBufferAddress(address) => write!(
+                formatter,
+                "IT8951 returned an invalid image-buffer address 0x{address:08x}"
+            ),
             Self::InvalidVcomResponse => formatter.write_str("IT8951 returned an invalid VCOM"),
             Self::DisplayTimeout => formatter.write_str("IT8951 display engine timed out"),
             Self::DeviceChanged { .. } => {
@@ -353,6 +369,7 @@ where
         match self {
             Self::Transport(error) => Some(error),
             Self::InvalidDeviceInfo
+            | Self::InvalidImageBufferAddress(_)
             | Self::InvalidVcomResponse
             | Self::DisplayTimeout
             | Self::DeviceChanged { .. }
@@ -396,6 +413,21 @@ impl<T: Transport> Controller<T> {
         if info.panel_size.is_empty() {
             return Err(Error::InvalidDeviceInfo);
         }
+        let maximum_buffer_bytes = info
+            .panel_size
+            .width
+            .checked_mul(info.panel_size.height)
+            .filter(|bytes| *bytes != 0);
+        let address_is_plausible = info.image_buffer_address != 0
+            && info.image_buffer_address.is_multiple_of(2)
+            && maximum_buffer_bytes.is_some_and(|bytes| {
+                info.image_buffer_address
+                    .checked_add(bytes.saturating_sub(1))
+                    .is_some()
+            });
+        if !address_is_plausible {
+            return Err(Error::InvalidImageBufferAddress(info.image_buffer_address));
+        }
         Ok(info)
     }
 
@@ -414,9 +446,10 @@ impl<T: Transport> Controller<T> {
 
     /// Explicitly writes VCOM and verifies matching controller readback.
     ///
-    /// This persistently changes a panel-health-sensitive controller setting.
-    /// Callers must verify the value from the exact panel FPC and obtain operator
-    /// authorization before invoking it.
+    /// This changes a panel-health-sensitive setting for the current controller
+    /// session. Hardware reset or power loss may restore a controller boot
+    /// default, so authorized callers must reapply and verify the exact value
+    /// from the panel FPC before every refresh session.
     pub fn set_vcom(&mut self, vcom: VcomMillivolts) -> Result<(), Error<T::Error>> {
         self.transport
             .command(COMMAND_VCOM)
@@ -630,7 +663,7 @@ impl<T: Transport> It8951Display<T> {
             let start = row * request.stride_bytes;
             request.pixels[start..start + row_bytes]
                 .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .map(|pair| controller_gray4_word(pair[0], pair[1]))
         });
         self.controller
             .transport
@@ -652,15 +685,9 @@ impl<T: Transport> It8951Display<T> {
             .transport
             .command(COMMAND_DISPLAY_BUFFER_AREA)
             .map_err(Error::Transport)?;
-        for argument in [
-            0,
-            0,
-            width,
-            height,
-            mode,
-            u16::from_le_bytes([address[0], address[1]]),
-            u16::from_le_bytes([address[2], address[3]]),
-        ] {
+        let address_low = u16::from_le_bytes([address[0], address[1]]);
+        let address_high = u16::from_le_bytes([address[2], address[3]]);
+        for argument in [0, 0, width, height, mode, address_low, address_high] {
             self.controller
                 .transport
                 .write_word(argument)
@@ -698,10 +725,7 @@ where
             });
         }
         if report.current_vcom != self.expected_vcom {
-            return Err(Error::VcomMismatch {
-                requested: self.expected_vcom,
-                observed: report.current_vcom,
-            });
+            self.controller.set_vcom(self.expected_vcom)?;
         }
         Ok(())
     }
@@ -722,7 +746,7 @@ mod tests {
         COMMAND_DISPLAY_BUFFER_AREA, COMMAND_GET_DEVICE_INFO, COMMAND_LOAD_IMAGE_AREA,
         COMMAND_LOAD_IMAGE_END, COMMAND_SYSTEM_RUN, COMMAND_VCOM, Controller, DeviceInfo,
         DisplayWait, Error, It8951Display, LutFamily, ProbeReport, Transport, UpdateError,
-        VcomMillivolts,
+        VcomMillivolts, controller_gray4_word,
     };
 
     #[derive(Default)]
@@ -888,6 +912,26 @@ mod tests {
     }
 
     #[test]
+    fn device_info_rejects_unusable_image_buffer_addresses() {
+        for address in [0, 1, u32::MAX - 1] {
+            let info = DeviceInfo {
+                image_buffer_address: address,
+                ..device_info(b"M641")
+            };
+            let transport = FakeTransport {
+                reads: words_for_device_info(info),
+                ..FakeTransport::default()
+            };
+            let mut controller = Controller::new(transport);
+
+            assert_eq!(
+                controller.device_info(),
+                Err(Error::InvalidImageBufferAddress(address))
+            );
+        }
+    }
+
+    #[test]
     fn setting_vcom_is_a_separate_explicit_operation() {
         let transport = FakeTransport {
             reads: vec![1_500],
@@ -988,16 +1032,45 @@ mod tests {
             .unwrap();
         let operations = display.into_controller().into_transport().operations;
 
-        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_AREA)));
-        assert!(operations.contains(&Operation::WriteMany(vec![0x2301, 0x6745])));
-        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_END)));
+        let load_command = operations
+            .iter()
+            .position(|operation| *operation == Operation::Command(COMMAND_LOAD_IMAGE_AREA))
+            .unwrap();
+        assert_eq!(
+            &operations[load_command + 1..load_command + 8],
+            &[
+                Operation::Write(0x20),
+                Operation::Write(0),
+                Operation::Write(0),
+                Operation::Write(4),
+                Operation::Write(2),
+                Operation::WriteMany(vec![0x3210, 0x7654]),
+                Operation::Command(COMMAND_LOAD_IMAGE_END),
+            ]
+        );
         let display_command = operations
             .iter()
             .position(|operation| *operation == Operation::Command(COMMAND_DISPLAY_BUFFER_AREA))
             .unwrap();
-        assert_eq!(operations[display_command + 5], Operation::Write(0));
-        assert_eq!(operations[display_command + 6], Operation::Write(0x5678));
-        assert_eq!(operations[display_command + 7], Operation::Write(0x1234));
+        assert_eq!(
+            &operations[display_command + 1..display_command + 8],
+            &[
+                Operation::Write(0),
+                Operation::Write(0),
+                Operation::Write(4),
+                Operation::Write(2),
+                Operation::Write(0),
+                Operation::Write(0x5678),
+                Operation::Write(0x1234),
+            ]
+        );
+    }
+
+    #[test]
+    fn gray4_adapter_matches_controller_pixel_numbering() {
+        // PaperOS bytes 01 23 encode left-to-right pixels 0, 1, 2, 3.
+        // IT8951 packed-write Figure 7-17 places the first pixel in the low nibble.
+        assert_eq!(controller_gray4_word(0x01, 0x23), 0x3210);
     }
 
     #[test]
@@ -1103,10 +1176,11 @@ mod tests {
     }
 
     #[test]
-    fn wake_rejects_changed_vcom_after_reprobe() {
+    fn wake_reapplies_expected_vcom_after_reprobe() {
         let info = device_info(b"M641");
         let mut reads = words_for_device_info(info);
         reads.push(1_400);
+        reads.push(1_500);
         let transport = FakeTransport {
             reads,
             ..FakeTransport::default()
@@ -1117,11 +1191,43 @@ mod tests {
             DisplayWait::new(3, 1).unwrap(),
         );
 
-        assert_eq!(
-            display.wake(),
-            Err(Error::VcomMismatch {
-                requested: VcomMillivolts::new(1_500).unwrap(),
-                observed: VcomMillivolts::new(1_400).unwrap(),
+        display.wake().unwrap();
+        let operations = display.into_controller().into_transport().operations;
+        assert!(operations.windows(4).any(|window| {
+            window
+                == [
+                    Operation::Command(COMMAND_VCOM),
+                    Operation::Write(1),
+                    Operation::Write(1_500),
+                    Operation::Command(COMMAND_VCOM),
+                ]
+        }));
+    }
+
+    #[test]
+    fn wake_rejects_changed_identity_before_writing_vcom() {
+        let expected = device_info(b"M641");
+        let observed = DeviceInfo {
+            image_buffer_address: 0x1234_567a,
+            ..expected
+        };
+        let mut reads = words_for_device_info(observed);
+        reads.push(1_400);
+        let transport = FakeTransport {
+            reads,
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(expected),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+
+        assert!(matches!(display.wake(), Err(Error::DeviceChanged { .. })));
+        let operations = display.into_controller().into_transport().operations;
+        assert!(
+            !operations.windows(2).any(|window| {
+                window == [Operation::Command(COMMAND_VCOM), Operation::Write(1)]
             })
         );
     }

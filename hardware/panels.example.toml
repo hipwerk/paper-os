@@ -9,11 +9,17 @@ height = 1072
 # Positive magnitude of the negative VCOM printed on this exact panel's FPC.
 vcom_mv = 0 # deliberately invalid until replaced
 
+# First run `probe` without these fields. Then copy its exact identity output
+# here before `calibrate`; refresh commands reject unpinned controller identity.
+# expected_firmware = "..."
+# expected_lut = "M641"
+
 spi_device = "/dev/spidev0.0"
 gpio_chip = "/dev/gpiochip0"
 cs_line = 8
 reset_line = 17
 ready_line = 24
+# Start at 1 MHz. Profiles reject values above the audited 12.5 MHz vendor rate.
 max_spi_hz = 1_000_000
 
 # Every wait is bounded. Start conservatively and record any measured changes.

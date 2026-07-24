@@ -30,7 +30,9 @@ panel-unsafe behavior.
   new pixels across the final legal aligned region. Refresh thresholds use
   refreshed area rather than only changed-pixel count.
 - IT8951 fast modes are allowlisted by exact known LUT family. Probing never
-  writes VCOM; setting VCOM remains a separate explicitly hazardous operation.
+  writes VCOM. A refresh session requires separate authorization to apply and
+  verify the exact FPC VCOM after reset. Controller boot values are observed
+  and logged, never inferred as panel targets.
 
 ## Consequences
 

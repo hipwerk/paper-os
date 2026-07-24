@@ -18,7 +18,9 @@ use paper_display::{Display, Rect, UpdateRequest, Waveform};
 #[cfg(any(target_os = "linux", test))]
 use paper_display::{PixelFormat, Size};
 #[cfg(target_os = "linux")]
-use paper_it8951::{Controller, ProbeReport};
+use paper_it8951::Controller;
+#[cfg(any(target_os = "linux", test))]
+use paper_it8951::ProbeReport;
 use paper_it8951_linux::{PanelProfile, load_panel_profile};
 
 const MAX_HOLD_SECONDS: u64 = 120;
@@ -41,6 +43,8 @@ enum Command {
     SelfTest,
     /// Resets, wakes, reads identity and VCOM, then sleeps; never refreshes.
     Probe(HardwareSelection),
+    /// Tests a session VCOM change after pinned identity checks; never refreshes.
+    SetVcom(VcomWrite),
     /// Runs white INIT, a Gray4 GC16 calibration page, white cleanup, and sleep.
     Calibrate(Calibration),
 }
@@ -62,12 +66,29 @@ struct HardwareSelection {
 struct Calibration {
     #[command(flatten)]
     hardware: HardwareSelection,
+    #[command(flatten)]
+    vcom: VcomAuthorization,
     /// Confirms that a visible full-screen panel refresh is intended.
     #[arg(long)]
     allow_refresh: bool,
     /// Seconds to leave the calibration page visible before white cleanup.
     #[arg(long, default_value_t = 10)]
     hold_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+struct VcomWrite {
+    #[command(flatten)]
+    hardware: HardwareSelection,
+    #[command(flatten)]
+    vcom: VcomAuthorization,
+}
+
+#[derive(Clone, Debug, Args)]
+struct VcomAuthorization {
+    /// Confirms that changing the controller's panel-sensitive VCOM is intended.
+    #[arg(long = "allow-vcom-write")]
+    allow_write: bool,
 }
 
 fn main() -> ExitCode {
@@ -91,6 +112,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             let profile = load_panel_profile(&selection.config, &selection.profile)?;
             run_probe(&profile)
         }
+        Command::SetVcom(write) => {
+            require_hardware_opt_in(&write.hardware)?;
+            require_vcom_authorization(&write.vcom)?;
+            let profile = load_panel_profile(&write.hardware.config, &write.hardware.profile)?;
+            require_pinned_identity(&profile)?;
+            run_set_vcom(&profile)
+        }
         Command::Calibrate(calibration) => {
             require_hardware_opt_in(&calibration.hardware)?;
             if !calibration.allow_refresh {
@@ -99,9 +127,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 )
                 .into());
             }
+            require_vcom_authorization(&calibration.vcom)?;
             validate_hold_seconds(calibration.hold_seconds)?;
             let profile =
                 load_panel_profile(&calibration.hardware.config, &calibration.hardware.profile)?;
+            require_pinned_identity(&profile)?;
             run_calibration(&profile, Duration::from_secs(calibration.hold_seconds))
         }
     }
@@ -123,9 +153,10 @@ struct ShutdownSignals {
 #[cfg(target_os = "linux")]
 impl ShutdownSignals {
     fn install() -> io::Result<Self> {
-        use signal_hook::consts::{SIGINT, SIGTERM};
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
         let requested = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(SIGHUP, Arc::clone(&requested))?;
         signal_hook::flag::register(SIGINT, Arc::clone(&requested))?;
         signal_hook::flag::register(SIGTERM, Arc::clone(&requested))?;
         Ok(Self { requested })
@@ -171,6 +202,91 @@ fn require_hardware_opt_in(selection: &HardwareSelection) -> Result<(), Box<dyn 
     }
 }
 
+fn require_vcom_authorization(authorization: &VcomAuthorization) -> Result<(), Box<dyn Error>> {
+    if !authorization.allow_write {
+        return Err(io::Error::other(
+            "VCOM mutation requires the explicit --allow-vcom-write flag",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn require_pinned_identity(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+    if profile.expected_firmware.is_none() || profile.expected_lut.is_none() {
+        Err(io::Error::other(
+            "this operation requires expected_firmware and expected_lut copied from a successful probe",
+        )
+        .into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+struct SleepGuard<R, E> {
+    resource: Option<R>,
+    sleep: fn(&mut R) -> Result<(), E>,
+    known_sleeping: bool,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<R, E> SleepGuard<R, E> {
+    fn new(resource: R, sleep: fn(&mut R) -> Result<(), E>) -> Self {
+        Self {
+            resource: Some(resource),
+            sleep,
+            known_sleeping: false,
+        }
+    }
+
+    fn resource_mut(&mut self) -> &mut R {
+        self.resource
+            .as_mut()
+            .expect("sleep guard always owns its resource while armed")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn into_inner(mut self) -> R {
+        self.resource
+            .take()
+            .expect("sleep guard always owns its resource while armed")
+    }
+
+    fn sleep_now(&mut self) -> Result<(), E> {
+        let result = (self.sleep)(self.resource_mut());
+        if result.is_ok() {
+            self.known_sleeping = true;
+        }
+        result
+    }
+
+    #[cfg(target_os = "linux")]
+    fn finish(mut self, result: Result<(), Box<dyn Error>>) -> Result<(), Box<dyn Error>>
+    where
+        E: std::fmt::Display + Error + 'static,
+    {
+        let cleanup = if self.known_sleeping {
+            Ok(())
+        } else {
+            self.sleep_now()
+        };
+        self.resource.take();
+        finish_with_cleanup(result, cleanup)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<R, E> Drop for SleepGuard<R, E> {
+    fn drop(&mut self) {
+        if !self.known_sleeping
+            && let Some(resource) = self.resource.as_mut()
+        {
+            let _ = (self.sleep)(resource);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn open_and_probe(
     profile: &PanelProfile,
@@ -201,20 +317,88 @@ fn open_and_probe(
 #[cfg(target_os = "linux")]
 fn run_probe(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
     let shutdown = ShutdownSignals::install()?;
-    let (mut controller, report) = open_and_probe(profile)?;
+    let (controller, report) = open_and_probe(profile)?;
+    let controller = SleepGuard::new(controller, Controller::sleep);
     print_probe(&report);
     let result = if shutdown.requested() {
         Err(interruption_error())
     } else {
-        verify_probe(profile, &report)
+        let result = verify_probe_identity(profile, &report);
+        if result.is_ok() && report.current_vcom != profile.vcom {
+            println!(
+                "controller boot VCOM is {} mV; refresh commands will apply the panel profile target of {} mV",
+                report.current_vcom.get(),
+                profile.vcom.get()
+            );
+        }
+        result
     };
-    let sleep = controller.sleep();
-    finish_with_cleanup(result, sleep)
+    controller.finish(result)
+}
+
+#[cfg(target_os = "linux")]
+fn run_set_vcom(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+    let shutdown = ShutdownSignals::install()?;
+    let (controller, report) = open_and_probe(profile)?;
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
+    print_probe(&report);
+    let result = (|| {
+        if shutdown.requested() {
+            return Err(interruption_error());
+        }
+        if !should_apply_profile_vcom(profile, &report)? {
+            println!(
+                "VCOM already matches named profile at {} mV; no write performed",
+                profile.vcom.get()
+            );
+            return Ok(());
+        }
+        controller.resource_mut().set_vcom(profile.vcom)?;
+        println!(
+            "VCOM changed from {} mV to {} mV for this controller session; readback verified",
+            report.current_vcom.get(),
+            profile.vcom.get()
+        );
+        Ok(())
+    })();
+    controller.finish(result)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_set_vcom(_profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+    Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run_probe(_profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
     Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_session_vcom<T>(
+    controller: &mut Controller<T>,
+    profile: &PanelProfile,
+    mut report: ProbeReport,
+) -> Result<ProbeReport, Box<dyn Error>>
+where
+    T: paper_it8951::Transport,
+    T::Error: std::fmt::Debug + Error + 'static,
+{
+    if should_apply_profile_vcom(profile, &report)? {
+        controller.set_vcom(profile.vcom)?;
+        println!(
+            "VCOM changed from {} mV to {} mV for this controller session; readback verified",
+            report.current_vcom.get(),
+            profile.vcom.get()
+        );
+        report.current_vcom = profile.vcom;
+    } else {
+        println!(
+            "VCOM already matches named profile at {} mV; no write performed",
+            profile.vcom.get()
+        );
+    }
+    Ok(report)
 }
 
 #[cfg(target_os = "linux")]
@@ -230,23 +414,33 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
     let white = vec![0xff; buffer_len];
     let calibration = calibration_page(size)?;
 
-    let (mut controller, report) = open_and_probe(profile)?;
+    let (controller, report) = open_and_probe(profile)?;
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
     print_probe(&report);
-    if let Err(error) = verify_probe(profile, &report) {
-        return finish_with_cleanup(Err(error), controller.sleep());
-    }
-    let mut display = paper_it8951::It8951Display::new(controller, report, profile.display_wait);
+    let report = match apply_session_vcom(controller.resource_mut(), profile, report) {
+        Ok(report) => report,
+        Err(error) => return controller.finish(Err(error)),
+    };
+    let display =
+        paper_it8951::It8951Display::new(controller.into_inner(), report, profile.display_wait);
+    let mut display = SleepGuard::new(display, Display::sleep);
 
     let display_result = (|| -> Result<(), Box<dyn Error>> {
         if shutdown.requested() {
             return Err(interruption_error());
         }
-        update_gray4(&mut display, size, row_bytes, &white, Waveform::Initialize)?;
+        update_gray4(
+            display.resource_mut(),
+            size,
+            row_bytes,
+            &white,
+            Waveform::Initialize,
+        )?;
         if shutdown.requested() {
             return Err(interruption_error());
         }
         update_gray4(
-            &mut display,
+            display.resource_mut(),
             size,
             row_bytes,
             &calibration,
@@ -258,11 +452,11 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
         Ok(())
     })();
     if let Err(error) = display_result {
-        return finish_with_cleanup(Err(error), display.sleep());
+        return display.finish(Err(error));
     }
 
-    if let Err(error) = display.sleep() {
-        return finish_with_cleanup(Err(error.into()), display.sleep());
+    if let Err(error) = display.sleep_now() {
+        return display.finish(Err(error.into()));
     }
     println!(
         "controller sleeping while calibration page remains visible for {} seconds",
@@ -270,21 +464,46 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
     );
     wait_for_hold(hold, &shutdown.requested)?;
 
-    if let Err(error) = display.wake() {
-        let error: Box<dyn Error> =
-            io::Error::other(format!("could not reinitialize for white cleanup: {error}")).into();
-        return finish_with_cleanup(Err(error), display.sleep());
-    }
+    let sleeping_display = display.into_inner();
+    let mut controller = sleeping_display.into_controller();
+    let report = match controller.probe() {
+        Ok(report) => report,
+        Err(error) => {
+            let cleanup = controller.sleep();
+            return finish_with_cleanup(
+                Err(
+                    io::Error::other(format!("could not reinitialize for white cleanup: {error}"))
+                        .into(),
+                ),
+                cleanup,
+            );
+        }
+    };
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
+    print_probe(&report);
+    let report = match apply_session_vcom(controller.resource_mut(), profile, report) {
+        Ok(report) => report,
+        Err(error) => return controller.finish(Err(error)),
+    };
     if shutdown.requested() {
-        return finish_with_cleanup(Err(interruption_error()), display.sleep());
+        return controller.finish(Err(interruption_error()));
     }
+    let display =
+        paper_it8951::It8951Display::new(controller.into_inner(), report, profile.display_wait);
+    let mut display = SleepGuard::new(display, Display::sleep);
 
-    let cleanup = update_gray4(&mut display, size, row_bytes, &white, Waveform::Initialize);
+    let cleanup = update_gray4(
+        display.resource_mut(),
+        size,
+        row_bytes,
+        &white,
+        Waveform::Initialize,
+    );
     let cleanup = match cleanup {
         Ok(()) if shutdown.requested() => Err(interruption_error()),
         result => result,
     };
-    finish_with_cleanup(cleanup, display.sleep())
+    display.finish(cleanup)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -334,8 +553,11 @@ where
         .map_err(Into::into)
 }
 
-#[cfg(target_os = "linux")]
-fn verify_probe(profile: &PanelProfile, report: &ProbeReport) -> Result<(), Box<dyn Error>> {
+#[cfg(any(target_os = "linux", test))]
+fn verify_probe_identity(
+    profile: &PanelProfile,
+    report: &ProbeReport,
+) -> Result<(), Box<dyn Error>> {
     if report.device_info.panel_size != profile.panel_size {
         return Err(io::Error::other(format!(
             "probed panel is {}×{}, but profile expects {}×{}",
@@ -346,15 +568,48 @@ fn verify_probe(profile: &PanelProfile, report: &ProbeReport) -> Result<(), Box<
         ))
         .into());
     }
-    if report.current_vcom != profile.vcom {
-        return Err(io::Error::other(format!(
-            "probed VCOM is {} mV, but named profile requires {} mV; refusing to refresh",
-            report.current_vcom.get(),
-            profile.vcom.get()
-        ))
-        .into());
-    }
+    verify_version(
+        "firmware",
+        profile.expected_firmware.as_deref(),
+        &report.device_info.firmware_version,
+    )?;
+    verify_version(
+        "LUT",
+        profile.expected_lut.as_deref(),
+        &report.device_info.lut_version,
+    )?;
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn should_apply_profile_vcom(
+    profile: &PanelProfile,
+    report: &ProbeReport,
+) -> Result<bool, Box<dyn Error>> {
+    require_pinned_identity(profile)?;
+    verify_probe_identity(profile, report)?;
+    Ok(report.current_vcom != profile.vcom)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn verify_version(
+    label: &str,
+    expected: Option<&str>,
+    observed: &[u8; 16],
+) -> Result<(), Box<dyn Error>> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let observed = version_bytes(observed);
+    if observed == expected.as_bytes() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "probed {label} is {:?}, but profile expects {expected:?}; refusing to refresh",
+            String::from_utf8_lossy(observed)
+        ))
+        .into())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -370,13 +625,18 @@ fn print_probe(report: &ProbeReport) {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn version_string(version: &[u8; 16]) -> String {
+    String::from_utf8_lossy(version_bytes(version)).into_owned()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn version_bytes(version: &[u8; 16]) -> &[u8] {
     let end = version
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(version.len());
-    String::from_utf8_lossy(&version[..end]).into_owned()
+    &version[..end]
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -395,15 +655,6 @@ fn calibration_page(size: Size) -> Result<Vec<u8>, Box<dyn Error>> {
         .ok_or_else(|| io::Error::other("calibration buffer size overflow"))?;
     let mut pixels = vec![0xff; len];
 
-    for x in 0..size.width {
-        set_gray4(&mut pixels, stride, x, 0, 0);
-        set_gray4(&mut pixels, stride, x, size.height - 1, 0);
-    }
-    for y in 0..size.height {
-        set_gray4(&mut pixels, stride, 0, y, 0);
-        set_gray4(&mut pixels, stride, size.width - 1, y, 0);
-    }
-
     let bar_top = size.height / 4;
     let bar_bottom = size.height.saturating_mul(3) / 4;
     for x in 0..size.width {
@@ -411,6 +662,26 @@ fn calibration_page(size: Size) -> Result<Vec<u8>, Box<dyn Error>> {
         for y in bar_top..bar_bottom {
             set_gray4(&mut pixels, stride, x, y, gray);
         }
+    }
+
+    if size.width >= 4 && size.height >= 3 {
+        let diagnostic_bottom = (1 + (size.height / 16).max(1)).min(size.height - 1);
+        for y in 1..diagnostic_bottom {
+            for x in 0..size.width {
+                let gray = [0, 5, 10, 15][x as usize % 4];
+                set_gray4(&mut pixels, stride, x, y, gray);
+            }
+        }
+    }
+
+    // Draw the border last so every content pass preserves the physical edge.
+    for x in 0..size.width {
+        set_gray4(&mut pixels, stride, x, 0, 0);
+        set_gray4(&mut pixels, stride, x, size.height - 1, 0);
+    }
+    for y in 0..size.height {
+        set_gray4(&mut pixels, stride, 0, y, 0);
+        set_gray4(&mut pixels, stride, size.width - 1, y, 0);
     }
     Ok(pixels)
 }
@@ -428,15 +699,77 @@ fn set_gray4(pixels: &mut [u8], stride: usize, x: u32, y: u32, gray: u8) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::io;
+    use std::path::PathBuf;
+    use std::rc::Rc;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use paper_display::{PixelFormat, Size};
+    use paper_it8951::{DeviceInfo, DisplayWait, ProbeReport, VcomMillivolts};
+    use paper_it8951_linux::{PanelProfile, Timing};
 
     use super::{
-        Calibration, Cli, Command, HardwareSelection, MAX_HOLD_SECONDS, calibration_page, run,
-        set_gray4, validate_hold_seconds, wait_for_hold,
+        Calibration, Cli, Command, HardwareSelection, MAX_HOLD_SECONDS, SleepGuard,
+        VcomAuthorization, VcomWrite, calibration_page, require_pinned_identity, run, set_gray4,
+        should_apply_profile_vcom, validate_hold_seconds, verify_probe_identity, version_string,
+        wait_for_hold,
     };
+
+    fn version(value: &[u8]) -> [u8; 16] {
+        let mut version = [0; 16];
+        version[..value.len()].copy_from_slice(value);
+        version
+    }
+
+    fn profile(expected_firmware: Option<&str>, expected_lut: Option<&str>) -> PanelProfile {
+        PanelProfile {
+            name: "desk".to_owned(),
+            panel_size: Size::new(1448, 1072),
+            vcom: VcomMillivolts::new(1_500).unwrap(),
+            expected_firmware: expected_firmware.map(str::to_owned),
+            expected_lut: expected_lut.map(str::to_owned),
+            spi_device: PathBuf::from("/dev/spidev0.0"),
+            gpio_chip: PathBuf::from("/dev/gpiochip0"),
+            cs_line: 8,
+            reset_line: 17,
+            ready_line: 24,
+            max_spi_hz: 1_000_000,
+            timing: Timing {
+                ready_timeout: Duration::from_secs(1),
+                ready_poll_interval: Duration::from_micros(100),
+                reset_high: Duration::from_millis(200),
+                reset_low: Duration::from_millis(10),
+                reset_recovery: Duration::from_millis(200),
+            },
+            display_wait: DisplayWait::new(30_000, 50).unwrap(),
+        }
+    }
+
+    fn probe_report() -> ProbeReport {
+        ProbeReport {
+            device_info: DeviceInfo {
+                panel_size: Size::new(1448, 1072),
+                image_buffer_address: 0x0012_0000,
+                firmware_version: version(b"FW6"),
+                lut_version: version(b"M641"),
+            },
+            current_vcom: VcomMillivolts::new(1_500).unwrap(),
+        }
+    }
+
+    struct FakeSleepResource {
+        calls: Rc<Cell<u32>>,
+    }
+
+    fn fake_sleep(resource: &mut FakeSleepResource) -> Result<(), io::Error> {
+        if resource.calls.get() == u32::MAX {
+            return Err(io::Error::other("synthetic sleep failure"));
+        }
+        resource.calls.set(resource.calls.get() + 1);
+        Ok(())
+    }
 
     #[test]
     fn gray4_packing_places_left_pixel_in_high_nibble() {
@@ -456,6 +789,67 @@ mod tests {
         assert_eq!(page[0] >> 4, 0);
         assert_eq!(page[(size.height as usize - 1) * stride] >> 4, 0);
         assert_ne!(page[3 * stride + 1], page[3 * stride + stride - 2]);
+        assert_eq!(&page[stride..stride + 3], &[0x05, 0xaf, 0x05]);
+        assert_eq!(page[3 * stride] >> 4, 0);
+        assert_eq!(page[3 * stride + stride - 1] & 0x0f, 0);
+    }
+
+    #[test]
+    fn refresh_requires_and_verifies_pinned_controller_identity() {
+        let report = probe_report();
+        let unpinned = profile(None, None);
+        assert!(require_pinned_identity(&unpinned).is_err());
+        assert!(should_apply_profile_vcom(&unpinned, &report).is_err());
+
+        let pinned = profile(Some("FW6"), Some("M641"));
+        assert!(verify_probe_identity(&pinned, &report).is_ok());
+
+        let wrong_lut = profile(Some("FW6"), Some("M841"));
+        let error = verify_probe_identity(&wrong_lut, &report).unwrap_err();
+        assert!(error.to_string().contains("probed LUT"));
+        assert_eq!(version_string(&report.device_info.lut_version), "M641");
+    }
+
+    #[test]
+    fn profile_vcom_is_applied_only_after_identity_is_verified() {
+        let pinned = profile(Some("FW6"), Some("M641"));
+        let mut report = probe_report();
+        report.current_vcom = VcomMillivolts::new(2_800).unwrap();
+
+        assert!(verify_probe_identity(&pinned, &report).is_ok());
+        assert!(should_apply_profile_vcom(&pinned, &report).unwrap());
+
+        report.current_vcom = pinned.vcom;
+        assert!(!should_apply_profile_vcom(&pinned, &report).unwrap());
+
+        report.device_info.lut_version = version(b"M841");
+        assert!(verify_probe_identity(&pinned, &report).is_err());
+        assert!(should_apply_profile_vcom(&pinned, &report).is_err());
+    }
+
+    #[test]
+    fn scope_guard_sleeps_unless_resource_is_already_known_sleeping() {
+        let calls = Rc::new(Cell::new(0));
+        {
+            let _guard = SleepGuard::new(
+                FakeSleepResource {
+                    calls: Rc::clone(&calls),
+                },
+                fake_sleep,
+            );
+        }
+        assert_eq!(calls.get(), 1);
+
+        {
+            let mut guard = SleepGuard::new(
+                FakeSleepResource {
+                    calls: Rc::clone(&calls),
+                },
+                fake_sleep,
+            );
+            guard.sleep_now().unwrap();
+        }
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
@@ -472,11 +866,24 @@ mod tests {
         assert!(error.to_string().contains("--allow-hardware"));
 
         let error = run(Cli {
+            command: Command::SetVcom(VcomWrite {
+                hardware: HardwareSelection {
+                    allow_hardware: true,
+                    ..selection.clone()
+                },
+                vcom: VcomAuthorization { allow_write: false },
+            }),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("--allow-vcom-write"));
+
+        let error = run(Cli {
             command: Command::Calibrate(Calibration {
                 hardware: HardwareSelection {
                     allow_hardware: true,
                     ..selection
                 },
+                vcom: VcomAuthorization { allow_write: true },
                 allow_refresh: false,
                 hold_seconds: 0,
             }),
