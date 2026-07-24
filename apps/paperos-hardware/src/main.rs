@@ -43,6 +43,8 @@ enum Command {
     SelfTest,
     /// Resets, wakes, reads identity and VCOM, then sleeps; never refreshes.
     Probe(HardwareSelection),
+    /// Tests a session VCOM change after pinned identity checks; never refreshes.
+    SetVcom(VcomWrite),
     /// Runs white INIT, a Gray4 GC16 calibration page, white cleanup, and sleep.
     Calibrate(Calibration),
 }
@@ -64,12 +66,29 @@ struct HardwareSelection {
 struct Calibration {
     #[command(flatten)]
     hardware: HardwareSelection,
+    #[command(flatten)]
+    vcom: VcomAuthorization,
     /// Confirms that a visible full-screen panel refresh is intended.
     #[arg(long)]
     allow_refresh: bool,
     /// Seconds to leave the calibration page visible before white cleanup.
     #[arg(long, default_value_t = 10)]
     hold_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+struct VcomWrite {
+    #[command(flatten)]
+    hardware: HardwareSelection,
+    #[command(flatten)]
+    vcom: VcomAuthorization,
+}
+
+#[derive(Clone, Debug, Args)]
+struct VcomAuthorization {
+    /// Confirms that changing the controller's panel-sensitive VCOM is intended.
+    #[arg(long = "allow-vcom-write")]
+    allow_write: bool,
 }
 
 fn main() -> ExitCode {
@@ -93,6 +112,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             let profile = load_panel_profile(&selection.config, &selection.profile)?;
             run_probe(&profile)
         }
+        Command::SetVcom(write) => {
+            require_hardware_opt_in(&write.hardware)?;
+            require_vcom_authorization(&write.vcom)?;
+            let profile = load_panel_profile(&write.hardware.config, &write.hardware.profile)?;
+            require_pinned_identity(&profile)?;
+            run_set_vcom(&profile)
+        }
         Command::Calibrate(calibration) => {
             require_hardware_opt_in(&calibration.hardware)?;
             if !calibration.allow_refresh {
@@ -101,10 +127,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 )
                 .into());
             }
+            require_vcom_authorization(&calibration.vcom)?;
             validate_hold_seconds(calibration.hold_seconds)?;
             let profile =
                 load_panel_profile(&calibration.hardware.config, &calibration.hardware.profile)?;
-            require_refresh_identity(&profile)?;
+            require_pinned_identity(&profile)?;
             run_calibration(&profile, Duration::from_secs(calibration.hold_seconds))
         }
     }
@@ -175,10 +202,20 @@ fn require_hardware_opt_in(selection: &HardwareSelection) -> Result<(), Box<dyn 
     }
 }
 
-fn require_refresh_identity(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+fn require_vcom_authorization(authorization: &VcomAuthorization) -> Result<(), Box<dyn Error>> {
+    if !authorization.allow_write {
+        return Err(io::Error::other(
+            "VCOM mutation requires the explicit --allow-vcom-write flag",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn require_pinned_identity(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
     if profile.expected_firmware.is_none() || profile.expected_lut.is_none() {
         Err(io::Error::other(
-            "calibration requires expected_firmware and expected_lut copied from a successful probe",
+            "this operation requires expected_firmware and expected_lut copied from a successful probe",
         )
         .into())
     } else {
@@ -222,11 +259,6 @@ impl<R, E> SleepGuard<R, E> {
             self.known_sleeping = true;
         }
         result
-    }
-
-    #[cfg(target_os = "linux")]
-    fn mark_awake_or_uncertain(&mut self) {
-        self.known_sleeping = false;
     }
 
     #[cfg(target_os = "linux")]
@@ -291,14 +323,82 @@ fn run_probe(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
     let result = if shutdown.requested() {
         Err(interruption_error())
     } else {
-        verify_probe(profile, &report)
+        let result = verify_probe_identity(profile, &report);
+        if result.is_ok() && report.current_vcom != profile.vcom {
+            println!(
+                "controller boot VCOM is {} mV; refresh commands will apply the panel profile target of {} mV",
+                report.current_vcom.get(),
+                profile.vcom.get()
+            );
+        }
+        result
     };
     controller.finish(result)
+}
+
+#[cfg(target_os = "linux")]
+fn run_set_vcom(profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+    let shutdown = ShutdownSignals::install()?;
+    let (controller, report) = open_and_probe(profile)?;
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
+    print_probe(&report);
+    let result = (|| {
+        if shutdown.requested() {
+            return Err(interruption_error());
+        }
+        if !should_apply_profile_vcom(profile, &report)? {
+            println!(
+                "VCOM already matches named profile at {} mV; no write performed",
+                profile.vcom.get()
+            );
+            return Ok(());
+        }
+        controller.resource_mut().set_vcom(profile.vcom)?;
+        println!(
+            "VCOM changed from {} mV to {} mV for this controller session; readback verified",
+            report.current_vcom.get(),
+            profile.vcom.get()
+        );
+        Ok(())
+    })();
+    controller.finish(result)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_set_vcom(_profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
+    Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run_probe(_profile: &PanelProfile) -> Result<(), Box<dyn Error>> {
     Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_session_vcom<T>(
+    controller: &mut Controller<T>,
+    profile: &PanelProfile,
+    mut report: ProbeReport,
+) -> Result<ProbeReport, Box<dyn Error>>
+where
+    T: paper_it8951::Transport,
+    T::Error: std::fmt::Debug + Error + 'static,
+{
+    if should_apply_profile_vcom(profile, &report)? {
+        controller.set_vcom(profile.vcom)?;
+        println!(
+            "VCOM changed from {} mV to {} mV for this controller session; readback verified",
+            report.current_vcom.get(),
+            profile.vcom.get()
+        );
+        report.current_vcom = profile.vcom;
+    } else {
+        println!(
+            "VCOM already matches named profile at {} mV; no write performed",
+            profile.vcom.get()
+        );
+    }
+    Ok(report)
 }
 
 #[cfg(target_os = "linux")]
@@ -315,11 +415,12 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
     let calibration = calibration_page(size)?;
 
     let (controller, report) = open_and_probe(profile)?;
-    let controller = SleepGuard::new(controller, Controller::sleep);
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
     print_probe(&report);
-    if let Err(error) = verify_refresh_probe(profile, &report) {
-        return controller.finish(Err(error));
-    }
+    let report = match apply_session_vcom(controller.resource_mut(), profile, report) {
+        Ok(report) => report,
+        Err(error) => return controller.finish(Err(error)),
+    };
     let display =
         paper_it8951::It8951Display::new(controller.into_inner(), report, profile.display_wait);
     let mut display = SleepGuard::new(display, Display::sleep);
@@ -363,15 +464,33 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
     );
     wait_for_hold(hold, &shutdown.requested)?;
 
-    display.mark_awake_or_uncertain();
-    if let Err(error) = display.resource_mut().wake() {
-        let error: Box<dyn Error> =
-            io::Error::other(format!("could not reinitialize for white cleanup: {error}")).into();
-        return display.finish(Err(error));
-    }
+    let sleeping_display = display.into_inner();
+    let mut controller = sleeping_display.into_controller();
+    let report = match controller.probe() {
+        Ok(report) => report,
+        Err(error) => {
+            let cleanup = controller.sleep();
+            return finish_with_cleanup(
+                Err(
+                    io::Error::other(format!("could not reinitialize for white cleanup: {error}"))
+                        .into(),
+                ),
+                cleanup,
+            );
+        }
+    };
+    let mut controller = SleepGuard::new(controller, Controller::sleep);
+    print_probe(&report);
+    let report = match apply_session_vcom(controller.resource_mut(), profile, report) {
+        Ok(report) => report,
+        Err(error) => return controller.finish(Err(error)),
+    };
     if shutdown.requested() {
-        return display.finish(Err(interruption_error()));
+        return controller.finish(Err(interruption_error()));
     }
+    let display =
+        paper_it8951::It8951Display::new(controller.into_inner(), report, profile.display_wait);
+    let mut display = SleepGuard::new(display, Display::sleep);
 
     let cleanup = update_gray4(
         display.resource_mut(),
@@ -435,7 +554,10 @@ where
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn verify_probe(profile: &PanelProfile, report: &ProbeReport) -> Result<(), Box<dyn Error>> {
+fn verify_probe_identity(
+    profile: &PanelProfile,
+    report: &ProbeReport,
+) -> Result<(), Box<dyn Error>> {
     if report.device_info.panel_size != profile.panel_size {
         return Err(io::Error::other(format!(
             "probed panel is {}×{}, but profile expects {}×{}",
@@ -443,14 +565,6 @@ fn verify_probe(profile: &PanelProfile, report: &ProbeReport) -> Result<(), Box<
             report.device_info.panel_size.height,
             profile.panel_size.width,
             profile.panel_size.height
-        ))
-        .into());
-    }
-    if report.current_vcom != profile.vcom {
-        return Err(io::Error::other(format!(
-            "probed VCOM is {} mV, but named profile requires {} mV; refusing to refresh",
-            report.current_vcom.get(),
-            profile.vcom.get()
         ))
         .into());
     }
@@ -468,12 +582,13 @@ fn verify_probe(profile: &PanelProfile, report: &ProbeReport) -> Result<(), Box<
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn verify_refresh_probe(
+fn should_apply_profile_vcom(
     profile: &PanelProfile,
     report: &ProbeReport,
-) -> Result<(), Box<dyn Error>> {
-    require_refresh_identity(profile)?;
-    verify_probe(profile, report)
+) -> Result<bool, Box<dyn Error>> {
+    require_pinned_identity(profile)?;
+    verify_probe_identity(profile, report)?;
+    Ok(report.current_vcom != profile.vcom)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -597,8 +712,9 @@ mod tests {
 
     use super::{
         Calibration, Cli, Command, HardwareSelection, MAX_HOLD_SECONDS, SleepGuard,
-        calibration_page, require_refresh_identity, run, set_gray4, validate_hold_seconds,
-        verify_refresh_probe, version_string, wait_for_hold,
+        VcomAuthorization, VcomWrite, calibration_page, require_pinned_identity, run, set_gray4,
+        should_apply_profile_vcom, validate_hold_seconds, verify_probe_identity, version_string,
+        wait_for_hold,
     };
 
     fn version(value: &[u8]) -> [u8; 16] {
@@ -682,16 +798,33 @@ mod tests {
     fn refresh_requires_and_verifies_pinned_controller_identity() {
         let report = probe_report();
         let unpinned = profile(None, None);
-        assert!(require_refresh_identity(&unpinned).is_err());
-        assert!(verify_refresh_probe(&unpinned, &report).is_err());
+        assert!(require_pinned_identity(&unpinned).is_err());
+        assert!(should_apply_profile_vcom(&unpinned, &report).is_err());
 
         let pinned = profile(Some("FW6"), Some("M641"));
-        assert!(verify_refresh_probe(&pinned, &report).is_ok());
+        assert!(verify_probe_identity(&pinned, &report).is_ok());
 
         let wrong_lut = profile(Some("FW6"), Some("M841"));
-        let error = verify_refresh_probe(&wrong_lut, &report).unwrap_err();
+        let error = verify_probe_identity(&wrong_lut, &report).unwrap_err();
         assert!(error.to_string().contains("probed LUT"));
         assert_eq!(version_string(&report.device_info.lut_version), "M641");
+    }
+
+    #[test]
+    fn profile_vcom_is_applied_only_after_identity_is_verified() {
+        let pinned = profile(Some("FW6"), Some("M641"));
+        let mut report = probe_report();
+        report.current_vcom = VcomMillivolts::new(2_800).unwrap();
+
+        assert!(verify_probe_identity(&pinned, &report).is_ok());
+        assert!(should_apply_profile_vcom(&pinned, &report).unwrap());
+
+        report.current_vcom = pinned.vcom;
+        assert!(!should_apply_profile_vcom(&pinned, &report).unwrap());
+
+        report.device_info.lut_version = version(b"M841");
+        assert!(verify_probe_identity(&pinned, &report).is_err());
+        assert!(should_apply_profile_vcom(&pinned, &report).is_err());
     }
 
     #[test]
@@ -733,11 +866,24 @@ mod tests {
         assert!(error.to_string().contains("--allow-hardware"));
 
         let error = run(Cli {
+            command: Command::SetVcom(VcomWrite {
+                hardware: HardwareSelection {
+                    allow_hardware: true,
+                    ..selection.clone()
+                },
+                vcom: VcomAuthorization { allow_write: false },
+            }),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("--allow-vcom-write"));
+
+        let error = run(Cli {
             command: Command::Calibrate(Calibration {
                 hardware: HardwareSelection {
                     allow_hardware: true,
                     ..selection
                 },
+                vcom: VcomAuthorization { allow_write: true },
                 allow_refresh: false,
                 hold_seconds: 0,
             }),

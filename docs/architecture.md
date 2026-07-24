@@ -80,7 +80,9 @@ to a `Transport`.
 
 It must not own Linux device paths, `spidev`, Raspberry Pi pin numbering, layout,
 or refresh policy. VCOM is a required typed input, is never defaulted, and a
-write succeeds only after matching controller readback.
+write succeeds only after matching controller readback. Treat it as
+session-scoped: reset or power loss may restore a controller boot value, so a
+refresh transaction must explicitly reapply the authorized FPC value.
 
 The first physical `Display` implementation advertises only full-screen packed
 Gray4 INIT/GC16. LUT family, A2 mode, and alignment remain controller metadata,
@@ -90,7 +92,10 @@ converted to a measured packed format at the display boundary. Packed display
 bytes are MSB-pixel-first with byte-aligned rows and white low-order padding
 bits. IT8951 packed writes instead number the first Gray4 pixel from the low
 nibble of a controller word, so its adapter performs the nibble-order conversion
-exactly once during upload. Refresh uses the explicit buffer-address command.
+exactly once during a streamed multiword upload. Refresh uses the explicit
+buffer-address command. A display instance is created only from an
+identity-checked report carrying the authorized panel VCOM; wake reprobes
+identity, then reapplies and verifies that VCOM if reset restored a boot value.
 
 ### paper-it8951-linux
 

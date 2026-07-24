@@ -7,6 +7,10 @@ Target panel: 1448×1072 monochrome/16-gray panel with IT8951 controller.
 - The glass, FPC, and connector are fragile. Reinforce/support the FPC during
   bench work.
 - Connect all panel and HAT cables before power. The board is not hot-pluggable.
+- Photograph the pin-1 ends of both the 40-pin gray ribbon and 34-pin panel
+  adapter connection before power. Do not infer contact orientation only from
+  the color of a stiffener; follow connector pin markings and the official
+  connection photograph.
 - Supply the HAT with 5 V as documented; GPIO signaling remains through the HAT.
 - Every panel has a different negative VCOM printed on its FPC. Record the
   positive millivolt magnitude in the local profile (for example, `-1.50 V`
@@ -61,6 +65,11 @@ include `cs_line` in the named panel profile.
   hard-coded.
 - Explicit VCOM writes are read back and fail on any mismatch.
 
+The HAT's red LED establishes only that the controller board has 5 V power. A
+successful IT8951 identity/VCOM probe establishes communication with the
+controller. Neither proves that the raw e-paper glass is electrically connected:
+the panel has no enumerable identity and no status LED.
+
 The physical width 1448 is not divisible by 32. Fast 1-bpp behavior at the last
 eight columns must be measured and represented as a mode-specific addressable
 bound; the runtime must fall back to grayscale rather than drop changed pixels.
@@ -75,14 +84,46 @@ dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
 Start `max_spi_hz` at 1 MHz. Profiles reject values above 12.5 MHz, the rate
 audited in Waveshare's Raspberry Pi implementation.
 
+## Cable assembly for the recorded fixture
+
+The recorded fixture uses a Driver HAT (B), 6inch e-Paper Adapter (B), and an
+ED060KC1 panel. With all power disconnected:
+
+1. Seat the gray 40-conductor ribbon between the HAT connector marked `40` and
+   the adapter connector marked `40`; lock both connector tabs.
+2. Seat the panel's orange/brown 34-contact flexible cable in the adapter
+   connector marked `34`; lock both dark edge tabs evenly.
+3. On this exact adapter/panel batch, when the adapter's printed blue PCB side
+   faces up, the `-2.08` label on the orange panel cable faces the same direction
+   as the blue stiffener at the adapter end of the gray ribbon.
+4. Compare the complete assembly with
+   [Waveshare's connection photograph](https://www.waveshare.com/w/upload/a/a0/Faqe-link.png).
+
+That orientation is fixture evidence, not a universal cable-color rule. If the
+board revision, panel, or adapter differs, use its pin markings and official
+documentation. Never reverse, reseat, or hot-plug either ribbon while powered.
+
 ## Bring-up sequence
 
 1. Photograph/record the panel model, HAT revision, FPC VCOM, Pi model, OS/kernel,
-   wiring, and DIP position.
-2. Enable SPI and run a loopback test before attaching the HAT if wiring is in
-   doubt.
-3. Run the vendor demo once with the exact VCOM. Record its device-info output
-   and confirm the panel itself renders correctly.
+   wiring, both connector orientations, pin markings, and DIP position.
+2. Enable SPI. If wiring is in doubt, power down and run a loopback test before
+   attaching the HAT.
+3. Establish the independent hardware baseline with Waveshare's unmodified
+   Raspberry Pi demo at the
+   [reviewed upstream commit](https://github.com/waveshareteam/IT8951-ePaper/tree/86406933d8f22af9fd3f2152b4958610c054b9a8).
+   Build it as documented, then supply the exact negative VCOM printed on the
+   attached panel FPC:
+
+   ```sh
+   sudo ./epd -2.08 0
+   ```
+
+   Replace `-2.08` only with the value printed on the physical panel. Observe a
+   complete visible demo and final cleanup. If controller commands work but the
+   glass never changes, stop and power down; Waveshare identifies the
+   HAT/adapter/panel connection as the likely fault. Recheck both ribbon
+   orientations and locks before changing protocol code.
 4. Run PaperOS probe-only mode:
 
    ```sh
@@ -92,29 +133,30 @@ audited in Waveshare's Raspberry Pi implementation.
      --allow-hardware
    ```
 
-   It resets, wakes, reads identity and VCOM, never writes VCOM, verifies the
-   named profile, and sleeps. Compare panel size, memory address, firmware, LUT,
-   and current VCOM to the baseline. Copy the exact printed firmware and LUT
-   strings into `expected_firmware` and `expected_lut` in the local profile,
-   then run probe again. Probe permits absent identity fields for this discovery
-   step but rejects any configured mismatch.
-5. Only after the second probe succeeds, and with separate authorization, run:
+   It resets, wakes, reads identity and VCOM, never writes VCOM, prints the
+   report, verifies controller identity against the named profile, and sleeps.
+   A boot VCOM different from the profile is reported but is not a probe error.
+   Copy the exact printed firmware and LUT strings into `expected_firmware` and
+   `expected_lut`. Never copy the controller boot VCOM over the FPC value.
+5. Only after identity is pinned, and with separate VCOM-write and refresh
+   authorization, run:
 
    ```sh
    paperos-hardware calibrate \
      --config hardware/panels.local.toml \
      --profile desk-6in-hd \
      --allow-hardware \
+     --allow-vcom-write \
      --allow-refresh
    ```
 
-   It refuses to start unless firmware and LUT are pinned, then runs white INIT
-   and a packed Gray4 GC16 calibration page with an order-sensitive `0/5/10/15`
-   stripe, sleeps during the bounded observation interval, and
-   resets/reprobes/revalidates full identity and VCOM before white INIT cleanup
-   and sleep. `SIGHUP`, `SIGINT`, or `SIGTERM` requests graceful sleep rather
-   than terminating immediately; scope cleanup also makes a best-effort sleep
-   request on unexpected early returns.
+   The target comes only from `vcom_mv` recorded from the FPC. Calibration
+   resets, verifies pinned identity, applies the profile VCOM if reset restored
+   another value, verifies readback, then runs white INIT and a packed Gray4
+   GC16 calibration page with an order-sensitive `0/5/10/15` stripe. After the
+   bounded observation sleep it repeats reset, identity verification, VCOM
+   application, and readback before white INIT cleanup and final sleep. Any
+   identity or readback mismatch aborts before refresh.
 6. Add partial and A2 experiments only after the full path is stable.
 
 Do not start with a complex Daily page: calibration bars, one-pixel borders,

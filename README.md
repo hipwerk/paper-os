@@ -13,9 +13,10 @@ a hardware backend.
 The repository is at foundation/bring-up stage. Geometry, grayscale framebuffer
 drawing, bounded layout, a `cosmic-text` shaping/raster boundary, safe refresh
 planning, an IT8951 protocol core, a Linux manual-CS host adapter, a simulator,
-and a packed-Gray4 bring-up diagnostic compile and are tested. Physical panel
-behavior has not yet been verified; the current `daily` output remains
-intentionally a placeholder.
+and a packed-Gray4 bring-up diagnostic compile and are tested. The exact
+Waveshare fixture has passed both its vendor-demo baseline and PaperOS's
+full-screen Gray4 calibration with verified cleanup. The current `daily` output
+remains intentionally a placeholder.
 
 ## Start here
 
@@ -84,7 +85,9 @@ cargo llvm-cov --locked --workspace --all-features --summary-only --fail-under-l
 ```
 
 Physical display tests are never part of the default test suite. They require a
-named panel profile, its exact VCOM value, and an explicit operator opt-in.
+named panel profile, its exact FPC VCOM value, pinned controller identity, and
+separate operator opt-ins for hardware access, session-scoped VCOM writes, and
+visible refreshes.
 
 ## License
 

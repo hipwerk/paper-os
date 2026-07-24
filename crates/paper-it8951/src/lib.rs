@@ -324,7 +324,7 @@ pub enum Error<E> {
     },
     /// The update was rejected before upload or refresh.
     InvalidUpdate(UpdateError),
-    /// A VCOM write completed at the transport layer but did not persist.
+    /// A VCOM write completed at the transport layer but readback did not match.
     VcomMismatch {
         /// Requested positive magnitude.
         requested: VcomMillivolts,
@@ -446,9 +446,10 @@ impl<T: Transport> Controller<T> {
 
     /// Explicitly writes VCOM and verifies matching controller readback.
     ///
-    /// This persistently changes a panel-health-sensitive controller setting.
-    /// Callers must verify the value from the exact panel FPC and obtain operator
-    /// authorization before invoking it.
+    /// This changes a panel-health-sensitive setting for the current controller
+    /// session. Hardware reset or power loss may restore a controller boot
+    /// default, so authorized callers must reapply and verify the exact value
+    /// from the panel FPC before every refresh session.
     pub fn set_vcom(&mut self, vcom: VcomMillivolts) -> Result<(), Error<T::Error>> {
         self.transport
             .command(COMMAND_VCOM)
@@ -684,15 +685,9 @@ impl<T: Transport> It8951Display<T> {
             .transport
             .command(COMMAND_DISPLAY_BUFFER_AREA)
             .map_err(Error::Transport)?;
-        for argument in [
-            0,
-            0,
-            width,
-            height,
-            mode,
-            u16::from_le_bytes([address[0], address[1]]),
-            u16::from_le_bytes([address[2], address[3]]),
-        ] {
+        let address_low = u16::from_le_bytes([address[0], address[1]]);
+        let address_high = u16::from_le_bytes([address[2], address[3]]);
+        for argument in [0, 0, width, height, mode, address_low, address_high] {
             self.controller
                 .transport
                 .write_word(argument)
@@ -730,10 +725,7 @@ where
             });
         }
         if report.current_vcom != self.expected_vcom {
-            return Err(Error::VcomMismatch {
-                requested: self.expected_vcom,
-                observed: report.current_vcom,
-            });
+            self.controller.set_vcom(self.expected_vcom)?;
         }
         Ok(())
     }
@@ -1040,16 +1032,38 @@ mod tests {
             .unwrap();
         let operations = display.into_controller().into_transport().operations;
 
-        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_AREA)));
-        assert!(operations.contains(&Operation::WriteMany(vec![0x3210, 0x7654])));
-        assert!(operations.contains(&Operation::Command(COMMAND_LOAD_IMAGE_END)));
+        let load_command = operations
+            .iter()
+            .position(|operation| *operation == Operation::Command(COMMAND_LOAD_IMAGE_AREA))
+            .unwrap();
+        assert_eq!(
+            &operations[load_command + 1..load_command + 8],
+            &[
+                Operation::Write(0x20),
+                Operation::Write(0),
+                Operation::Write(0),
+                Operation::Write(4),
+                Operation::Write(2),
+                Operation::WriteMany(vec![0x3210, 0x7654]),
+                Operation::Command(COMMAND_LOAD_IMAGE_END),
+            ]
+        );
         let display_command = operations
             .iter()
             .position(|operation| *operation == Operation::Command(COMMAND_DISPLAY_BUFFER_AREA))
             .unwrap();
-        assert_eq!(operations[display_command + 5], Operation::Write(0));
-        assert_eq!(operations[display_command + 6], Operation::Write(0x5678));
-        assert_eq!(operations[display_command + 7], Operation::Write(0x1234));
+        assert_eq!(
+            &operations[display_command + 1..display_command + 8],
+            &[
+                Operation::Write(0),
+                Operation::Write(0),
+                Operation::Write(4),
+                Operation::Write(2),
+                Operation::Write(0),
+                Operation::Write(0x5678),
+                Operation::Write(0x1234),
+            ]
+        );
     }
 
     #[test]
@@ -1162,10 +1176,11 @@ mod tests {
     }
 
     #[test]
-    fn wake_rejects_changed_vcom_after_reprobe() {
+    fn wake_reapplies_expected_vcom_after_reprobe() {
         let info = device_info(b"M641");
         let mut reads = words_for_device_info(info);
         reads.push(1_400);
+        reads.push(1_500);
         let transport = FakeTransport {
             reads,
             ..FakeTransport::default()
@@ -1176,11 +1191,43 @@ mod tests {
             DisplayWait::new(3, 1).unwrap(),
         );
 
-        assert_eq!(
-            display.wake(),
-            Err(Error::VcomMismatch {
-                requested: VcomMillivolts::new(1_500).unwrap(),
-                observed: VcomMillivolts::new(1_400).unwrap(),
+        display.wake().unwrap();
+        let operations = display.into_controller().into_transport().operations;
+        assert!(operations.windows(4).any(|window| {
+            window
+                == [
+                    Operation::Command(COMMAND_VCOM),
+                    Operation::Write(1),
+                    Operation::Write(1_500),
+                    Operation::Command(COMMAND_VCOM),
+                ]
+        }));
+    }
+
+    #[test]
+    fn wake_rejects_changed_identity_before_writing_vcom() {
+        let expected = device_info(b"M641");
+        let observed = DeviceInfo {
+            image_buffer_address: 0x1234_567a,
+            ..expected
+        };
+        let mut reads = words_for_device_info(observed);
+        reads.push(1_400);
+        let transport = FakeTransport {
+            reads,
+            ..FakeTransport::default()
+        };
+        let mut display = It8951Display::new(
+            Controller::new(transport),
+            probe_report(expected),
+            DisplayWait::new(3, 1).unwrap(),
+        );
+
+        assert!(matches!(display.wake(), Err(Error::DeviceChanged { .. })));
+        let operations = display.into_controller().into_transport().operations;
+        assert!(
+            !operations.windows(2).any(|window| {
+                window == [Operation::Command(COMMAND_VCOM), Operation::Write(1)]
             })
         );
     }

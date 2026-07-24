@@ -41,12 +41,13 @@ ellipsizing.
 
 The IT8951 protocol fake records commands, single and bulk words, reads, delays,
 and reset. It verifies probe non-mutation, literal firmware/LUT classification,
-VCOM readback, mismatch failure, packed Gray4 upload, explicit-buffer refresh,
-PaperOS-to-controller Gray4 nibble conversion, plausible image-buffer addresses,
-deep-sleep reprobe, and display deadline. The Linux host fake verifies preamble
-byte order, dummy reads, manual-CS lifetime across HRDY synchronization, bulk
-transfer, SPI/profile safety bounds, pinned identity, shared-deadline expiry,
-dual transaction/CS-release failure reporting, and stuck HRDY timeout. Short
+VCOM readback, mismatch failure, streamed packed Gray4 upload, explicit-buffer
+refresh, PaperOS-to-controller Gray4 nibble conversion, plausible image-buffer
+addresses, deep-sleep identity reprobe and VCOM reapplication, and display
+deadline. The Linux host fake verifies preamble byte order, dummy reads,
+manual-CS lifetime across HRDY synchronization, bulk transfer, SPI/profile
+safety bounds, pinned identity, shared-deadline expiry, dual
+transaction/CS-release failure reporting, and stuck HRDY timeout. Short
 system calls are handled by
 `write_all`/`read_exact`; logic-analyzer evidence belongs in the physical lab
 report.
@@ -62,13 +63,19 @@ as unrestricted.
 
 Each step requires the local panel profile and operator authorization:
 
-1. **Baseline:** run the vendor C demo and record panel/controller identity.
-2. **Probe only:** reset, wake, read info and VCOM, then sleep; no VCOM write.
-3. **Safe full update:** white INIT, packed Gray4/GC16 calibration, white cleanup.
-4. **Partial grayscale:** fixed small regions and edge cases.
-5. **Fast monochrome:** legal aligned regions away from unsupported edge pixels.
-6. **Stress:** repeated patterns with scheduled cleanup and temperature record.
-7. **Soak:** daemon operation, power interruption, network loss, and recovery.
+1. **Baseline:** with all cables locked before power, run the unchanged vendor C
+   demo using the exact FPC VCOM and record visible panel behavior plus
+   controller identity.
+2. **Probe only:** reset, wake, record identity and boot VCOM, then sleep; no
+   VCOM write.
+3. **Session VCOM:** with pinned identity and explicit authorization, apply the
+   FPC value and verify readback; assume reset may restore the boot value.
+4. **Safe full update:** atomically verify identity, apply/verify FPC VCOM, then
+   run white INIT, packed Gray4/GC16 calibration, and white cleanup.
+5. **Partial grayscale:** fixed small regions and edge cases.
+6. **Fast monochrome:** legal aligned regions away from unsupported edge pixels.
+7. **Stress:** repeated patterns with scheduled cleanup and temperature record.
+8. **Soak:** daemon operation, power interruption, network loss, and recovery.
 
 Record upload duration, controller-ready duration, visible transition, region,
 format, firmware/LUT, SPI rate, ambient temperature, update count, and an

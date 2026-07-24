@@ -29,11 +29,15 @@ Physical commands must not guess a panel, VCOM, or unbounded wait policy.
   backend converts Gray4 to the controller's first-pixel-in-low-nibble order.
 - A dedicated diagnostic requires an exact named local profile and
   `--allow-hardware`; visible refresh additionally requires `--allow-refresh`.
-  Probe and calibration never write VCOM. Probe discovers firmware/LUT;
-  calibration requires both strings to be pinned exactly. SPI is capped at the
-  12.5 MHz rate audited in Waveshare's Pi implementation. Calibration sleeps
-  during its bounded observation interval, reinitializes before cleanup, and
-  handles hangup/termination signals plus scope exit as sleep requests.
+  Probe never writes VCOM. Session VCOM mutation additionally requires
+  `--allow-vcom-write`, pinned firmware/LUT identity, and verified readback.
+  Calibration carries that authorization atomically with refresh authorization
+  because controller reset may restore a boot VCOM. A previously initialized
+  display similarly reprobes identity before reapplying and verifying its
+  authorized VCOM on wake. SPI is capped at the 12.5 MHz rate audited in
+  Waveshare's Pi implementation. Calibration sleeps during its bounded
+  observation interval, then reverifies identity and reapplies/verifies FPC
+  VCOM before cleanup. Hangup/termination signals plus scope exit request sleep.
 - Deployment executes both binaries in hardware-free modes before atomically
   activating one release directory.
 

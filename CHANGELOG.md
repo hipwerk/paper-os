@@ -21,3 +21,7 @@ releasing.
 - Safe uncertain-state cold starts, explicit refresh-history restoration,
   validated non-zero update alignment, isolated deployment environment loading,
   and reconciled contributor/hardware guidance.
+- Guarded session-scoped IT8951 VCOM application with pinned identity, verified
+  readback, refresh-independent opt-in, and reset-safe reapplication.
+- First physical PaperOS validation on the 1448×1072 Waveshare fixture,
+  including full-panel addressing, 16-level grayscale, and white cleanup.
