@@ -135,3 +135,32 @@ This satisfies the first pixels-on-glass exit gate: full-panel addressing,
 Gray4 packing and nibble order, explicit-buffer refresh, grayscale waveform,
 session VCOM handling, cleanup, and bounded failure behavior are now verified
 on the named fixture.
+
+## PaperOS typography specimen: passed
+
+The deterministic typography slice passed the complete repository gate with 84
+tests and 88.35% workspace line coverage. The same accepted 1072×1448 Gray8
+golden page used by desktop preview was cross-compiled and deployed as release
+`/opt/paperos/releases/1e5c7b7d553b7884`. Device-free Pi smoke tests rendered
+both preview applications before activation and did not open SPI or GPIO.
+
+The named Pi profile was updated with `rotation_degrees = 90`, mapping the
+logical portrait page to the controller's native 1448×1072 landscape buffer.
+One separately authorized specimen run then:
+
+1. probed the pinned 1448×1072 controller, `SWv_0.6.` firmware,
+   `M841_TFAB512` LUT, and `0x00122480` image buffer;
+2. observed the reset VCOM of 2800 mV;
+3. applied the FPC value of 2080 mV and verified readback;
+4. performed white initialization and streamed the canonical Gray8 specimen as
+   controller-order Gray4 using GC16;
+5. slept while leaving the specimen visible for a ten-second review;
+6. reprobed the same identity, reapplied 2080 mV, and verified readback;
+7. completed white cleanup and slept.
+
+The operator confirmed correct portrait output, complete content, and beautiful
+print-quality typography on the physical panel. The display returned to white
+after the review. This satisfies the typography-and-preview exit gate: bundled
+font shaping, scene rasterization, grayscale composition, rotation, streamed
+Gray8 conversion, and the desktop-to-glass pixel path are verified together on
+the named fixture.

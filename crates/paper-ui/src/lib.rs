@@ -1,7 +1,9 @@
 //! Application-facing scenes, widgets, and render context.
 
+use core::fmt;
+
 use paper_display::{Rect, Size};
-use paper_graphics::Gray8;
+use paper_graphics::{Framebuffer, GraphicsError, Gray8};
 use paper_layout::{Constraints, ScaleFactor};
 use paper_text::{Paragraph, TextEngine, TextError, TextLayout, TextOverflow, TextStyle};
 
@@ -138,9 +140,84 @@ pub trait Application {
     fn render(&self, context: &mut Context<'_>) -> Result<Scene, TextError>;
 }
 
+/// Failure while rasterizing a retained scene.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SceneRenderError {
+    /// The target framebuffer could not be allocated.
+    Graphics(GraphicsError),
+    /// A text command could not be shaped or rasterized.
+    Text(TextError),
+}
+
+impl fmt::Display for SceneRenderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Graphics(error) => write!(formatter, "could not create render target: {error}"),
+            Self::Text(error) => write!(formatter, "could not render text: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SceneRenderError {}
+
+impl From<GraphicsError> for SceneRenderError {
+    fn from(error: GraphicsError) -> Self {
+        Self::Graphics(error)
+    }
+}
+
+impl From<TextError> for SceneRenderError {
+    fn from(error: TextError) -> Self {
+        Self::Text(error)
+    }
+}
+
+/// Rasterizes an ordered scene into a canonical Gray8 framebuffer.
+pub fn render_scene(
+    scene: &Scene,
+    size: Size,
+    text_engine: &mut dyn TextEngine,
+) -> Result<Framebuffer, SceneRenderError> {
+    let mut frame = Framebuffer::new(size, Gray8::WHITE)?;
+    for command in scene.commands() {
+        match command {
+            DrawCommand::Fill { rect, color } => frame.fill_rect(*rect, *color),
+            DrawCommand::Stroke { rect, width, color } => {
+                frame.stroke_rect(*rect, *width, *color);
+            }
+            DrawCommand::Text(command) => {
+                let paragraph = Paragraph {
+                    text: &command.content,
+                    style: &command.style,
+                    max_size: command.bounds.size,
+                    max_lines: command.max_lines,
+                    overflow: command.overflow,
+                };
+                let origin = command.bounds.origin;
+                let color = command.color;
+                text_engine.rasterize(&paragraph, &mut |coverage| {
+                    let x = u32::try_from(coverage.x).unwrap_or(u32::MAX);
+                    let y = u32::try_from(coverage.y).unwrap_or(u32::MAX);
+                    frame.blend_rect(
+                        Rect::new(
+                            origin.x.saturating_add(x),
+                            origin.y.saturating_add(y),
+                            coverage.width,
+                            coverage.height,
+                        ),
+                        color,
+                        coverage.coverage,
+                    );
+                })?;
+            }
+        }
+    }
+    Ok(frame)
+}
+
 #[cfg(test)]
 mod tests {
-    use paper_display::{Rect, Size};
+    use paper_display::{Point, Rect, Size};
     use paper_graphics::Gray8;
     use paper_layout::{Constraints, ScaleFactor};
     use paper_text::{
@@ -148,7 +225,7 @@ mod tests {
         TextLayout, TextOverflow, TextStyle,
     };
 
-    use super::{Context, DrawCommand, Scene, Widget};
+    use super::{Context, DrawCommand, Scene, TextCommand, Widget, render_scene};
 
     struct BoundsWidget;
 
@@ -191,6 +268,32 @@ mod tests {
             paragraph: &Paragraph<'_>,
             _emit: &mut dyn FnMut(CoverageRect),
         ) -> Result<TextLayout, TextError> {
+            self.measure(paragraph)
+        }
+    }
+
+    struct CoverageEngine;
+
+    impl TextEngine for CoverageEngine {
+        fn measure(&mut self, paragraph: &Paragraph<'_>) -> Result<TextLayout, TextError> {
+            Ok(TextLayout {
+                size: paragraph.max_size,
+                line_count: 1,
+            })
+        }
+
+        fn rasterize(
+            &mut self,
+            paragraph: &Paragraph<'_>,
+            emit: &mut dyn FnMut(CoverageRect),
+        ) -> Result<TextLayout, TextError> {
+            emit(CoverageRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+                coverage: 128,
+            });
             self.measure(paragraph)
         }
     }
@@ -271,5 +374,32 @@ mod tests {
             context.measure_text(&paragraph).unwrap().size,
             Size::new(42, 18)
         );
+    }
+
+    #[test]
+    fn scene_rasterizer_preserves_order_and_composites_text_coverage() {
+        let mut scene = Scene::new();
+        scene.push(DrawCommand::Fill {
+            rect: Rect::new(0, 0, 4, 3),
+            color: Gray8(200),
+        });
+        scene.push(DrawCommand::Text(TextCommand {
+            bounds: Rect::new(1, 1, 2, 1),
+            content: "ink".to_owned(),
+            style: style(),
+            color: Gray8::BLACK,
+            max_lines: Some(1),
+            overflow: TextOverflow::Clip,
+        }));
+        scene.push(DrawCommand::Stroke {
+            rect: Rect::new(0, 0, 4, 3),
+            width: 1,
+            color: Gray8::BLACK,
+        });
+
+        let frame = render_scene(&scene, Size::new(4, 3), &mut CoverageEngine).unwrap();
+        assert_eq!(frame.get(Point::new(0, 0)), Some(Gray8::BLACK));
+        assert_eq!(frame.get(Point::new(1, 1)), Some(Gray8(100)));
+        assert_eq!(frame.get(Point::new(2, 1)), Some(Gray8(100)));
     }
 }

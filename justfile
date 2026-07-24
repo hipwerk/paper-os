@@ -44,6 +44,9 @@ shell:
 pi-check:
     cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu
 
+pi-lint:
+    cargo clippy --locked --workspace --all-targets --all-features --target aarch64-unknown-linux-gnu -- -D warnings
+
 core-check:
     cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf
 
@@ -58,10 +61,13 @@ coverage-check:
     cargo llvm-cov --locked -p paper-it8951 --all-features --summary-only --fail-under-lines 75
     cargo llvm-cov --locked -p paper-it8951-linux --all-features --summary-only --fail-under-lines 75
 
-ci: lock fmt lint test docs deny typos actions shell pi-check core-check coverage-check
+ci: lock fmt lint pi-lint test docs deny typos actions shell pi-check core-check coverage-check
 
 preview output="artifacts/daily.pgm":
     cargo run -p daily -- {{ output }}
+
+specimen output="artifacts/specimen.pgm":
+    cargo run -p paperos-specimen -- {{ output }}
 
 deploy:
     ./scripts/deploy-pi

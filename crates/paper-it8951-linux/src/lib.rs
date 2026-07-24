@@ -319,6 +319,8 @@ struct RawPanelProfile {
     controller: String,
     width: u32,
     height: u32,
+    #[serde(default)]
+    rotation_degrees: u16,
     vcom_mv: u16,
     expected_firmware: Option<String>,
     expected_lut: Option<String>,
@@ -344,6 +346,8 @@ pub struct PanelProfile {
     pub name: String,
     /// Expected native panel dimensions.
     pub panel_size: paper_display::Size,
+    /// Clockwise mounting rotation from logical page to native controller pixels.
+    pub rotation_degrees: u16,
     /// Exact VCOM magnitude recorded from this panel's FPC.
     pub vcom: VcomMillivolts,
     /// Exact firmware string pinned after the first successful probe.
@@ -450,6 +454,9 @@ fn validate_profile(raw: RawPanelProfile) -> Result<PanelProfile, ProfileError> 
     {
         return Err(invalid("dimensions must be non-zero IT8951 u16 values"));
     }
+    if !matches!(raw.rotation_degrees, 0 | 90 | 180 | 270) {
+        return Err(invalid("rotation_degrees must be 0, 90, 180, or 270"));
+    }
     let vcom =
         VcomMillivolts::new(raw.vcom_mv).ok_or_else(|| invalid("vcom_mv must be 1..=5000"))?;
     if !(1..=MAX_AUDITED_SPI_HZ).contains(&raw.max_spi_hz) {
@@ -518,6 +525,7 @@ fn validate_profile(raw: RawPanelProfile) -> Result<PanelProfile, ProfileError> 
     Ok(PanelProfile {
         name: raw.name,
         panel_size: paper_display::Size::new(raw.width, raw.height),
+        rotation_degrees: raw.rotation_degrees,
         vcom,
         expected_firmware: raw.expected_firmware,
         expected_lut: raw.expected_lut,
@@ -985,6 +993,7 @@ display_poll_ms = 100
         assert_eq!(profile.cs_line, 8);
         assert_eq!(profile.vcom.get(), 1500);
         assert_eq!(profile.panel_size, paper_display::Size::new(1448, 1072));
+        assert_eq!(profile.rotation_degrees, 0);
         assert_eq!(profile.expected_firmware, None);
         assert_eq!(profile.expected_lut, None);
     }
@@ -1021,6 +1030,12 @@ display_poll_ms = 100
         let invalid = valid.replace("vcom_mv = 1500", "vcom_mv = 0");
         assert!(matches!(
             load_panel_profile_from_str(&invalid, "desk"),
+            Err(super::ProfileError::Invalid { .. })
+        ));
+
+        let invalid_rotation = valid.replace("height = 2", "height = 2\nrotation_degrees = 45");
+        assert!(matches!(
+            load_panel_profile_from_str(&invalid_rotation, "desk"),
             Err(super::ProfileError::Invalid { .. })
         ));
     }

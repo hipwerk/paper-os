@@ -74,9 +74,9 @@ mode-specific addressable bounds before partial/A2 operations are exposed.
 ### paper-it8951
 
 Owns protocol commands, device-info parsing, LUT interpretation, VCOM typing,
-deep-sleep reinitialization, bounded display-engine polling, and full packed
-Gray4 upload/refresh. It is `no_std` and delegates exact SPI/GPIO transactions
-to a `Transport`.
+deep-sleep reinitialization, bounded display-engine polling, and full-screen
+Gray4/Gray8 upload and refresh. It is `no_std` and delegates exact SPI/GPIO
+transactions to a `Transport`.
 
 It must not own Linux device paths, `spidev`, Raspberry Pi pin numbering, layout,
 or refresh policy. VCOM is a required typed input, is never defaulted, and a
@@ -84,18 +84,18 @@ write succeeds only after matching controller readback. Treat it as
 session-scoped: reset or power loss may restore a controller boot value, so a
 refresh transaction must explicitly reapply the authorized FPC value.
 
-The first physical `Display` implementation advertises only full-screen packed
-Gray4 INIT/GC16. LUT family, A2 mode, and alignment remain controller metadata,
-not executable `DisplayCapabilities`. Direct Gray8 is deliberately not
-advertised because the controller cannot bulk-write it; canonical Gray8 will be
-converted to a measured packed format at the display boundary. Packed display
-bytes are MSB-pixel-first with byte-aligned rows and white low-order padding
-bits. IT8951 packed writes instead number the first Gray4 pixel from the low
-nibble of a controller word, so its adapter performs the nibble-order conversion
-exactly once during a streamed multiword upload. Refresh uses the explicit
-buffer-address command. A display instance is created only from an
-identity-checked report carrying the authorized panel VCOM; wake reprobes
-identity, then reapplies and verifies that VCOM if reset restored a boot value.
+The first physical `Display` implementation advertises full-screen Gray4 and
+canonical Gray8 INIT/GC16. LUT family, A2 mode, and alignment remain controller
+metadata, not executable `DisplayCapabilities`. The Gray8 path deterministically
+quantizes four pixels to packed Gray4 while streaming, avoiding an intermediate
+packed framebuffer. Packed display bytes are MSB-pixel-first with byte-aligned
+rows and white low-order padding bits. IT8951 packed writes instead number the
+first Gray4 pixel from the low nibble of a controller word, so its adapter
+performs nibble-order conversion exactly once during a streamed multiword
+upload. Refresh uses the explicit buffer-address command. A display instance is
+created only from an identity-checked report carrying the authorized panel
+VCOM; wake reprobes identity, then reapplies and verifies that VCOM if reset
+restored a boot value.
 
 ### paper-it8951-linux
 
@@ -107,6 +107,8 @@ Display polling establishes one monotonic deadline shared by every nested HRDY
 wait. Named profiles cap SPI at the 12.5 MHz rate audited in Waveshare's current
 Raspberry Pi implementation; bring-up starts at 1 MHz. Firmware and LUT strings
 may be learned by probe, but both must be pinned before any refresh.
+Profiles also declare a validated right-angle mounting rotation that maps a
+logical application page to the controller's native dimensions.
 Applications and portable controller code do not depend on this crate.
 
 ### paper-runtime
@@ -125,7 +127,8 @@ multiple regions after measurements justify the complexity.
 
 ### paper-graphics
 
-Owns deterministic raster storage and drawing. The initial Gray8 framebuffer is
+Owns deterministic raster storage, drawing, coverage alpha composition, and
+exact right-angle framebuffer rotation. The initial Gray8 framebuffer is
 contiguous and host-friendly. Future tiled surfaces must preserve the same
 observable pixel semantics.
 
@@ -133,11 +136,12 @@ observable pixel semantics.
 
 Owns font selection, shaping, bidi, wrapping, metrics, truncation, and glyph
 rasterization boundaries. The first backend is `cosmic-text` 0.19 with HarfRust
-shaping, font discovery, layout, and Swash rasterization. Its public seam emits
-coverage rectangles, not glyph IDs, so fallback font identity stays with the
-engine that can rasterize it. Coverage is clipped to the paragraph bounds and
-empty bounds emit nothing. PaperOS will bundle explicitly licensed fonts for
-deterministic production rendering instead of relying on host discovery.
+shaping, layout, and Swash rasterization. Its public seam emits coverage
+rectangles, not glyph IDs, so fallback font identity stays with the engine that
+can rasterize it. Coverage is clipped to the paragraph bounds and empty bounds
+emit nothing. Production and golden paths construct an isolated font database
+from pinned, licensed font bytes; system discovery remains available only when
+a caller deliberately selects it.
 
 ### paper-layout
 
@@ -153,7 +157,9 @@ measures within constraints using an explicit render context and draws into the
 final rectangle assigned by its parent; hidden mutable layout caches are not
 part of the contract. Bounded text commands retain content, resolved style,
 ink, line limit, and overflow policy. Themes expose semantic tokens and remain
-explicit layout inputs.
+explicit layout inputs. Its ordered scene rasterizer converts Fill, Stroke, and
+Text commands to canonical Gray8 using the same text engine used for
+measurement.
 
 ### paper-assets
 

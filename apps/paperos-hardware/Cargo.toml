@@ -11,8 +11,10 @@ publish = false
 [dependencies]
 clap.workspace = true
 paper-display.workspace = true
+paper-graphics.workspace = true
 paper-it8951.workspace = true
 paper-it8951-linux.workspace = true
+paperos-specimen.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 signal-hook.workspace = true

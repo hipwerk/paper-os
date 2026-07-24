@@ -1,6 +1,7 @@
 [files]
 extend-exclude = [
     "Cargo.lock",
+    "apps/specimen/tests/golden/*.pgm",
     "artifacts/",
     "target/",
 ]

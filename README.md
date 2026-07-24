@@ -11,12 +11,14 @@ a hardware backend.
 > SwiftUI for E Ink, with the sensibility of designing a printed page.
 
 The repository is at foundation/bring-up stage. Geometry, grayscale framebuffer
-drawing, bounded layout, a `cosmic-text` shaping/raster boundary, safe refresh
-planning, an IT8951 protocol core, a Linux manual-CS host adapter, a simulator,
-and a packed-Gray4 bring-up diagnostic compile and are tested. The exact
-Waveshare fixture has passed both its vendor-demo baseline and PaperOS's
-full-screen Gray4 calibration with verified cleanup. The current `daily` output
-remains intentionally a placeholder.
+drawing, bounded layout, deterministic bundled-font shaping, retained-scene
+rasterization, safe refresh planning, an IT8951 protocol core, a Linux manual-CS
+host adapter, and a simulator compile and are tested. The exact Waveshare
+fixture has passed both its vendor-demo baseline and PaperOS's full-screen Gray4
+calibration with verified cleanup. The deterministic multilingual typography
+specimen has also passed physical visual review with print-quality output,
+correct portrait rotation, and verified white cleanup. The current `daily`
+output remains intentionally a placeholder.
 
 ## Start here
 
@@ -28,6 +30,7 @@ components, and cross targets automatically:
 rustup show
 cargo test --locked --workspace --all-targets --all-features
 cargo run -p daily -- artifacts/daily.pgm
+cargo run -p paperos-specimen -- artifacts/specimen.pgm
 cargo run -p paperos-hardware -- self-test
 ```
 
@@ -42,13 +45,15 @@ asdf install
 
 Open the generated PGM in Preview, ImageMagick, or another image viewer.
 Install the optional tools listed in [development](docs/development.md), then
-`just ci` runs the complete local quality gate and `just preview` renders the
-sample.
+`just ci` runs the complete local quality gate. `just preview` renders the
+placeholder Daily page and `just specimen` renders the accepted typography
+page.
 
 ## Workspace
 
 ```text
 apps/daily             Reference application
+apps/specimen          Deterministic multilingual typography specimen
 crates/paper-display   Display capabilities and update contract
 crates/paper-it8951    Portable IT8951 protocol core
 crates/paper-it8951-linux Linux spidev/GPIO-v2 host adapter
@@ -73,6 +78,7 @@ and physical-panel work starts in [deployment](docs/deployment.md) and the
 cargo fmt --all -- --check
 cargo metadata --locked --no-deps --format-version 1
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features --target aarch64-unknown-linux-gnu -- -D warnings
 cargo test --locked --workspace --all-targets --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu

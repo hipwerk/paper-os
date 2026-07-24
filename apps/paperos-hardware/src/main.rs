@@ -18,6 +18,8 @@ use paper_display::{Display, Rect, UpdateRequest, Waveform};
 #[cfg(any(target_os = "linux", test))]
 use paper_display::{PixelFormat, Size};
 #[cfg(target_os = "linux")]
+use paper_graphics::Rotation;
+#[cfg(target_os = "linux")]
 use paper_it8951::Controller;
 #[cfg(any(target_os = "linux", test))]
 use paper_it8951::ProbeReport;
@@ -47,6 +49,8 @@ enum Command {
     SetVcom(VcomWrite),
     /// Runs white INIT, a Gray4 GC16 calibration page, white cleanup, and sleep.
     Calibrate(Calibration),
+    /// Shows the deterministic typography specimen, then cleans to white.
+    Specimen(Calibration),
 }
 
 #[derive(Clone, Debug, Args)]
@@ -133,6 +137,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 load_panel_profile(&calibration.hardware.config, &calibration.hardware.profile)?;
             require_pinned_identity(&profile)?;
             run_calibration(&profile, Duration::from_secs(calibration.hold_seconds))
+        }
+        Command::Specimen(specimen) => {
+            require_hardware_opt_in(&specimen.hardware)?;
+            if !specimen.allow_refresh {
+                return Err(io::Error::other(
+                    "specimen requires the explicit --allow-refresh flag",
+                )
+                .into());
+            }
+            require_vcom_authorization(&specimen.vcom)?;
+            validate_hold_seconds(specimen.hold_seconds)?;
+            let profile =
+                load_panel_profile(&specimen.hardware.config, &specimen.hardware.profile)?;
+            require_pinned_identity(&profile)?;
+            run_specimen(&profile, Duration::from_secs(specimen.hold_seconds))
         }
     }
 }
@@ -403,16 +422,66 @@ where
 
 #[cfg(target_os = "linux")]
 fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn Error>> {
-    let shutdown = ShutdownSignals::install()?;
     let size = profile.panel_size;
     let row_bytes = PixelFormat::Gray4
         .row_bytes(size.width)
         .ok_or_else(|| io::Error::other("panel width cannot be represented as Gray4"))?;
-    let buffer_len = row_bytes
-        .checked_mul(size.height as usize)
-        .ok_or_else(|| io::Error::other("calibration buffer size overflow"))?;
-    let white = vec![0xff; buffer_len];
     let calibration = calibration_page(size)?;
+    run_observed_page(
+        profile,
+        hold,
+        "calibration",
+        PixelFormat::Gray4,
+        row_bytes,
+        &calibration,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn run_specimen(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn Error>> {
+    let rotation = match profile.rotation_degrees {
+        0 => Rotation::None,
+        90 => Rotation::Clockwise90,
+        180 => Rotation::Clockwise180,
+        270 => Rotation::Clockwise270,
+        _ => return Err(io::Error::other("panel profile contains an invalid rotation").into()),
+    };
+    let logical = paperos_specimen::render_specimen()?;
+    if rotation.output_size(logical.size()) != profile.panel_size {
+        return Err(io::Error::other(format!(
+            "specimen rotated by {} degrees is {}×{}, but the profile expects {}×{}",
+            profile.rotation_degrees,
+            rotation.output_size(logical.size()).width,
+            rotation.output_size(logical.size()).height,
+            profile.panel_size.width,
+            profile.panel_size.height
+        ))
+        .into());
+    }
+    let native = logical.rotated(rotation);
+    run_observed_page(
+        profile,
+        hold,
+        "typography specimen",
+        PixelFormat::Gray8,
+        native.stride_bytes(),
+        native.pixels(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn run_observed_page(
+    profile: &PanelProfile,
+    hold: Duration,
+    label: &str,
+    pixel_format: PixelFormat,
+    stride_bytes: usize,
+    page: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let shutdown = ShutdownSignals::install()?;
+    let size = profile.panel_size;
+    let buffer_len = validate_full_page(size, pixel_format, stride_bytes, page)?;
+    let white = vec![0xff; buffer_len];
 
     let (controller, report) = open_and_probe(profile)?;
     let mut controller = SleepGuard::new(controller, Controller::sleep);
@@ -429,21 +498,23 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
         if shutdown.requested() {
             return Err(interruption_error());
         }
-        update_gray4(
+        update_frame(
             display.resource_mut(),
             size,
-            row_bytes,
+            pixel_format,
+            stride_bytes,
             &white,
             Waveform::Initialize,
         )?;
         if shutdown.requested() {
             return Err(interruption_error());
         }
-        update_gray4(
+        update_frame(
             display.resource_mut(),
             size,
-            row_bytes,
-            &calibration,
+            pixel_format,
+            stride_bytes,
+            page,
             Waveform::Grayscale,
         )?;
         if shutdown.requested() {
@@ -459,7 +530,7 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
         return display.finish(Err(error.into()));
     }
     println!(
-        "controller sleeping while calibration page remains visible for {} seconds",
+        "controller sleeping while {label} remains visible for {} seconds",
         hold.as_secs()
     );
     wait_for_hold(hold, &shutdown.requested)?;
@@ -492,10 +563,11 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
         paper_it8951::It8951Display::new(controller.into_inner(), report, profile.display_wait);
     let mut display = SleepGuard::new(display, Display::sleep);
 
-    let cleanup = update_gray4(
+    let cleanup = update_frame(
         display.resource_mut(),
         size,
-        row_bytes,
+        pixel_format,
+        stride_bytes,
         &white,
         Waveform::Initialize,
     );
@@ -506,8 +578,40 @@ fn run_calibration(profile: &PanelProfile, hold: Duration) -> Result<(), Box<dyn
     display.finish(cleanup)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn validate_full_page(
+    size: Size,
+    pixel_format: PixelFormat,
+    stride_bytes: usize,
+    page: &[u8],
+) -> io::Result<usize> {
+    let row_bytes = pixel_format
+        .row_bytes(size.width)
+        .ok_or_else(|| io::Error::other("panel width cannot represent the requested format"))?;
+    if stride_bytes != row_bytes {
+        return Err(io::Error::other(
+            "page stride does not match its packed width",
+        ));
+    }
+    let buffer_len = row_bytes
+        .checked_mul(size.height as usize)
+        .ok_or_else(|| io::Error::other("page buffer size overflow"))?;
+    if page.len() != buffer_len {
+        return Err(io::Error::other(format!(
+            "page contains {} bytes, expected {buffer_len}",
+            page.len()
+        )));
+    }
+    Ok(buffer_len)
+}
+
 #[cfg(not(target_os = "linux"))]
 fn run_calibration(_profile: &PanelProfile, _hold: Duration) -> Result<(), Box<dyn Error>> {
+    Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_specimen(_profile: &PanelProfile, _hold: Duration) -> Result<(), Box<dyn Error>> {
     Err(io::Error::other("physical IT8951 access is supported only on Linux").into())
 }
 
@@ -531,9 +635,10 @@ where
 }
 
 #[cfg(target_os = "linux")]
-fn update_gray4<T>(
+fn update_frame<T>(
     display: &mut paper_it8951::It8951Display<T>,
     size: Size,
+    pixel_format: PixelFormat,
     stride_bytes: usize,
     pixels: &[u8],
     waveform: Waveform,
@@ -545,7 +650,7 @@ where
     display
         .update(UpdateRequest {
             region: Rect::from_size(size),
-            pixel_format: PixelFormat::Gray4,
+            pixel_format,
             stride_bytes,
             pixels,
             waveform,
@@ -713,8 +818,8 @@ mod tests {
     use super::{
         Calibration, Cli, Command, HardwareSelection, MAX_HOLD_SECONDS, SleepGuard,
         VcomAuthorization, VcomWrite, calibration_page, require_pinned_identity, run, set_gray4,
-        should_apply_profile_vcom, validate_hold_seconds, verify_probe_identity, version_string,
-        wait_for_hold,
+        should_apply_profile_vcom, validate_full_page, validate_hold_seconds,
+        verify_probe_identity, version_string, wait_for_hold,
     };
 
     fn version(value: &[u8]) -> [u8; 16] {
@@ -727,6 +832,7 @@ mod tests {
         PanelProfile {
             name: "desk".to_owned(),
             panel_size: Size::new(1448, 1072),
+            rotation_degrees: 0,
             vcom: VcomMillivolts::new(1_500).unwrap(),
             expected_firmware: expected_firmware.map(str::to_owned),
             expected_lut: expected_lut.map(str::to_owned),
@@ -792,6 +898,19 @@ mod tests {
         assert_eq!(&page[stride..stride + 3], &[0x05, 0xaf, 0x05]);
         assert_eq!(page[3 * stride] >> 4, 0);
         assert_eq!(page[3 * stride + stride - 1] & 0x0f, 0);
+    }
+
+    #[test]
+    fn full_page_validation_rejects_stride_and_length_mismatches() {
+        let size = Size::new(4, 2);
+        let page = [0xff; 8];
+
+        assert_eq!(
+            validate_full_page(size, PixelFormat::Gray8, 4, &page).unwrap(),
+            8
+        );
+        assert!(validate_full_page(size, PixelFormat::Gray8, 3, &page).is_err());
+        assert!(validate_full_page(size, PixelFormat::Gray8, 4, &page[..7]).is_err());
     }
 
     #[test]
@@ -879,6 +998,20 @@ mod tests {
 
         let error = run(Cli {
             command: Command::Calibrate(Calibration {
+                hardware: HardwareSelection {
+                    allow_hardware: true,
+                    ..selection.clone()
+                },
+                vcom: VcomAuthorization { allow_write: true },
+                allow_refresh: false,
+                hold_seconds: 0,
+            }),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("--allow-refresh"));
+
+        let error = run(Cli {
+            command: Command::Specimen(Calibration {
                 hardware: HardwareSelection {
                     allow_hardware: true,
                     ..selection

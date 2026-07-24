@@ -5,9 +5,13 @@ OS, Linux distribution, web renderer, or Waveshare-only application. Preserve
 application portability and treat typography, deterministic output, and panel
 health as product requirements.
 
-Hardware status: simulator plus an unverified Linux IT8951 bring-up path for
-probe and full packed-Gray4 refresh. No physical lab result exists yet; direct
-Gray8, partial, and fast refresh remain unavailable.
+Hardware status: the Linux IT8951 path has physically passed probe, VCOM
+verification, full packed-Gray4 calibration, and white cleanup on the named
+Waveshare fixture. Full-screen canonical Gray8 is deterministically streamed as
+packed Gray4 at the backend boundary. The deterministic multilingual typography
+specimen has matching desktop golden evidence and a successful physical
+print-quality review with white cleanup. Partial and fast refresh remain
+unavailable.
 
 ## Read only what the task needs
 
@@ -26,11 +30,13 @@ linked document by default.
 
 - Format: `cargo fmt --all -- --check`
 - Lint: `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+- Pi lint: `cargo clippy --locked --workspace --all-targets --all-features --target aarch64-unknown-linux-gnu -- -D warnings`
 - Test: `cargo test --locked --workspace --all-targets --all-features`
 - Docs: `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps`
 - Pi target: `cargo check --locked --workspace --all-targets --target aarch64-unknown-linux-gnu`
 - Portable core: `cargo check --locked -p paper-display -p paper-it8951 -p paper-layout --target thumbv7em-none-eabihf`
 - Preview: `cargo run -p daily -- artifacts/daily.pgm`
+- Typography specimen: `cargo run -p paperos-specimen -- artifacts/specimen.pgm`
 - Hardware-free diagnostic: `cargo run -p paperos-hardware -- self-test`
 - Full local gate: `just ci` when `just` is installed.
 

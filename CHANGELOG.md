@@ -25,3 +25,12 @@ releasing.
   readback, refresh-independent opt-in, and reset-safe reapplication.
 - First physical PaperOS validation on the 1448×1072 Waveshare fixture,
   including full-panel addressing, 16-level grayscale, and white cleanup.
+- Deterministic retained-scene rasterization with alpha-composited text,
+  right-angle framebuffer rotation, and bundled Source Serif 4 and Noto Naskh
+  Arabic fonts with pinned provenance.
+- A multilingual portrait specimen shared by desktop preview and the guarded
+  hardware diagnostic, with an exact Gray8 golden page.
+- Profile-defined mounting rotation and streamed Gray8-to-controller-Gray4
+  conversion without an intermediate packed framebuffer.
+- Physical validation of the deterministic portrait typography specimen on the
+  1448×1072 Waveshare fixture, including print-quality text and white cleanup.

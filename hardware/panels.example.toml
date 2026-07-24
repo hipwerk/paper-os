@@ -5,6 +5,9 @@ name = "desk-6in-hd"
 controller = "it8951"
 width = 1448
 height = 1072
+# Clockwise mounting rotation from logical application coordinates to the
+# controller's native buffer. This fixture is normally mounted in portrait.
+rotation_degrees = 90
 
 # Positive magnitude of the negative VCOM printed on this exact panel's FPC.
 vcom_mv = 0 # deliberately invalid until replaced

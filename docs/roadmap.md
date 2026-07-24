@@ -44,17 +44,25 @@ Waveshare C demo, VCOM is verified, and failures time out safely.
 The exit gate was met on the named 6-inch fixture with release
 `c5fadfbd1b7c8e99`.
 
-## Slice 2: typography and preview
+## Slice 2: typography and preview — complete
 
-- integrate the existing `cosmic-text` backend into the scene-to-Gray8 renderer
-- Bundled OFL-licensed variable/static font fixtures with license manifest
-- paragraph shaping, bidi, kerning, ligatures, wrapping, and ellipsis
-- grayscale glyph composition and scene clipping in `paper-graphics`
-- deterministic golden pages in CI
-- desktop preview with panel size, rotation, and pixel-density profiles
+- Implemented: `cosmic-text` integration in the scene-to-Gray8 renderer
+- Implemented: pinned OFL-licensed Source Serif 4 and Noto Naskh Arabic assets
+  with provenance and checksums
+- Implemented: paragraph shaping, bidi, kerning, ligatures, wrapping, and
+  bounded overflow through the existing text seam
+- Implemented: grayscale glyph composition, scene clipping, and exact
+  right-angle framebuffer rotation
+- Implemented: deterministic multilingual golden page and desktop PGM preview
+- Implemented: named-profile mounting rotation and a guarded hardware specimen
+- Verified: the accepted portrait specimen rendered with print-quality text on
+  the named physical fixture and completed white cleanup
 
 Exit gate: a multilingual specimen page is pixel-stable in CI and visually
 resembles print on the panel.
+
+The exit gate was met on the named 6-inch fixture with release
+`1e5c7b7d553b7884`.
 
 ## Slice 3: declarative page
 
@@ -67,7 +75,7 @@ Exit gate: Daily renders the same accepted page in simulator and hardware.
 
 ## Slice 4: deliberate refresh
 
-- remaining 1/2-bpp packing and Gray8-to-packed conversion/dithering
+- remaining 1/2-bpp packing and measured dithering policies
 - mode-specific legal update regions, including the M641 32-pixel rule
 - partial GC16 and A2 updates
 - update history persisted across daemon restarts

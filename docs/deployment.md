@@ -13,7 +13,7 @@ This is the lowest-friction bring-up path and avoids cross-linker surprises:
 ```sh
 rsync -az --delete --exclude target ./ "$PAPEROS_PI_USER@$PAPEROS_PI_HOST:~/paper-os/"
 ssh "$PAPEROS_PI_USER@$PAPEROS_PI_HOST" \
-  'cd ~/paper-os && cargo build --release -p daily -p paperos-hardware'
+  'cd ~/paper-os && cargo build --release -p daily -p paperos-hardware -p paperos-specimen'
 ```
 
 The first build is slower; incremental builds are appropriate during driver
@@ -32,13 +32,13 @@ export PAPEROS_PI_USER=<ssh-user>
 ```
 
 `cargo-zigbuild` supplies the Linux linker/sysroot that `rustup target add`
-alone does not provide. The deployment script builds `daily` and
-`paperos-hardware`, copies them to remote `mktemp` paths, executes the hardware
-diagnostic's device-free `self-test`, runs Daily to a temporary PGM, and checks
-that artifact before installation. It installs both under one
-content-addressed `/opt/paperos/releases/<id>/` directory and atomically moves
-`/opt/paperos/current`. Deployment and smoke testing do not open SPI/GPIO or
-touch the panel.
+alone does not provide. The deployment script builds `daily`,
+`paperos-specimen`, and `paperos-hardware`, copies them to remote `mktemp`
+paths, executes the hardware diagnostic's device-free `self-test`, and renders
+both preview applications to checked temporary PGMs. It installs all three
+under one content-addressed `/opt/paperos/releases/<id>/` directory and
+atomically moves `/opt/paperos/current`. Deployment and smoke testing do not
+open SPI/GPIO or touch the panel.
 
 ## Pi host preparation
 
@@ -85,6 +85,12 @@ cargo run --release -p paperos-hardware -- \
   --allow-hardware \
   --allow-vcom-write \
   --allow-refresh
+
+cargo run --release -p paperos-hardware -- \
+  specimen --config hardware/panels.local.toml --profile desk-6in-hd \
+  --allow-hardware \
+  --allow-vcom-write \
+  --allow-refresh
 ```
 
 `probe` resets, wakes, reads identity and VCOM, verifies controller identity
@@ -104,6 +110,10 @@ needed, verifies readback, and only then refreshes. It repeats that sequence
 after the observation sleep before white cleanup. Any identity or readback
 mismatch aborts before a refresh. `SIGHUP`/`SIGINT`/`SIGTERM` request graceful
 sleep, and an armed scope guard attempts sleep on unexpected early return.
+`specimen` uses the same guarded white-initialize, observe, white-cleanup
+sequence. It renders the accepted logical portrait page, applies the validated
+profile rotation, and streams canonical Gray8 through the backend's
+deterministic Gray4 conversion.
 
 ## Service design
 

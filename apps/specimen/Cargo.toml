@@ -1,0 +1,20 @@
+[package]
+name = "paperos-specimen"
+description = "Deterministic PaperOS typography specimen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+paper-display.workspace = true
+paper-graphics.workspace = true
+paper-layout.workspace = true
+paper-simulator.workspace = true
+paper-text.workspace = true
+paper-ui.workspace = true
+
+[lints]
+workspace = true

@@ -3,6 +3,10 @@
 - Status: accepted
 - Date: 2026-07-23
 
+The initial direct-Gray8 limitation below is superseded by
+[ADR 0007](0007-deterministic-typography-pipeline.md); the manual-CS and
+bring-up safety decisions remain current.
+
 ## Context
 
 The IT8951 SPI transaction sends a preamble, waits for HRDY, and then exchanges
@@ -22,11 +26,12 @@ Physical commands must not guess a panel, VCOM, or unbounded wait policy.
   multiword data, and provides delay support for bounded controller polling.
 - Host HRDY waits and portable display-engine polling share one monotonic
   operation deadline.
-- The first physical backend advertises full packed-Gray4 INIT/GC16 only and
-  refreshes through the explicit buffer-address command. Direct Gray8 remains
-  unadvertised until a measured conversion/cost policy exists. Packed formats
-  use MSB-pixel-first bytes, byte-aligned rows, and white unused low bits. The
-  backend converts Gray4 to the controller's first-pixel-in-low-nibble order.
+- The initial physical backend advertised full packed-Gray4 INIT/GC16 and
+  refreshed through the explicit buffer-address command. ADR 0007 later added
+  canonical Gray8 by streaming a measured Gray8-to-Gray4 conversion. Packed
+  formats use MSB-pixel-first bytes, byte-aligned rows, and white unused low
+  bits. The backend converts Gray4 to the controller's
+  first-pixel-in-low-nibble order.
 - A dedicated diagnostic requires an exact named local profile and
   `--allow-hardware`; visible refresh additionally requires `--allow-refresh`.
   Probe never writes VCOM. Session VCOM mutation additionally requires
@@ -38,8 +43,8 @@ Physical commands must not guess a panel, VCOM, or unbounded wait policy.
   Waveshare's Pi implementation. Calibration sleeps during its bounded
   observation interval, then reverifies identity and reapplies/verifies FPC
   VCOM before cleanup. Hangup/termination signals plus scope exit request sleep.
-- Deployment executes both binaries in hardware-free modes before atomically
-  activating one release directory.
+- Deployment executes every shipped binary in a hardware-free mode before
+  atomically activating one release directory.
 
 ## Consequences
 
