@@ -31,6 +31,7 @@ cargo fmt --all
 cargo test --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo run -p daily -- artifacts/daily.pgm
+cargo run -p paperos-specimen -- artifacts/specimen.pgm
 ```
 
 Fast tests, dependency policy, workflow linting, typo checks, and coverage use
@@ -72,6 +73,9 @@ The host text backend is `cosmic-text` 0.19 rather than independently assembling
 shaping, fallback, bidi, wrapping, and rasterization. It remains behind
 `paper-text`, which exposes coverage pixels instead of backend cache keys, so a
 smaller constrained implementation can satisfy the same contract later.
+Deterministic production and golden rendering must load explicitly supplied font
+bytes. Bundled font revisions, checksums, and licenses live under
+`assets/fonts/`; do not silently substitute host fonts.
 
 ## Adding a crate
 

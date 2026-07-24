@@ -456,9 +456,23 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "paper-display",
+ "paper-graphics",
  "paper-it8951",
  "paper-it8951-linux",
+ "paperos-specimen",
  "signal-hook",
+]
+
+[[package]]
+name = "paperos-specimen"
+version = "0.1.0"
+dependencies = [
+ "paper-display",
+ "paper-graphics",
+ "paper-layout",
+ "paper-simulator",
+ "paper-text",
+ "paper-ui",
 ]
 
 [[package]]

@@ -15,6 +15,30 @@ impl Gray8 {
     pub const WHITE: Self = Self(255);
 }
 
+/// A clockwise framebuffer rotation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Rotation {
+    /// Preserve source orientation.
+    #[default]
+    None,
+    /// Rotate 90 degrees clockwise.
+    Clockwise90,
+    /// Rotate 180 degrees.
+    Clockwise180,
+    /// Rotate 270 degrees clockwise.
+    Clockwise270,
+}
+
+impl Rotation {
+    /// Returns the output size after applying this rotation.
+    pub const fn output_size(self, input: Size) -> Size {
+        match self {
+            Self::None | Self::Clockwise180 => input,
+            Self::Clockwise90 | Self::Clockwise270 => Size::new(input.height, input.width),
+        }
+    }
+}
+
 /// Framebuffer construction failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphicsError {
@@ -139,6 +163,33 @@ impl Framebuffer {
         }
     }
 
+    /// Alpha-composites one ink color over a clipped rectangle.
+    pub fn blend_rect(&mut self, rect: Rect, ink: Gray8, coverage: u8) {
+        if coverage == 0 {
+            return;
+        }
+        if coverage == u8::MAX {
+            self.fill_rect(rect, ink);
+            return;
+        }
+        let Some(rect) = rect.intersection(Rect::from_size(self.size)) else {
+            return;
+        };
+        let stride = self.stride_bytes();
+        let alpha = u32::from(coverage);
+        let inverse = u32::from(u8::MAX - coverage);
+
+        for y in rect.origin.y..rect.bottom() {
+            let start = y as usize * stride + rect.origin.x as usize;
+            let end = start + rect.size.width as usize;
+            for destination in &mut self.pixels[start..end] {
+                let blended =
+                    (u32::from(ink.0) * alpha + u32::from(*destination) * inverse + 127) / 255;
+                *destination = u8::try_from(blended).unwrap_or(u8::MAX);
+            }
+        }
+    }
+
     /// Draws an inward rectangular stroke, clipped to the framebuffer.
     pub fn stroke_rect(&mut self, rect: Rect, width: u32, color: Gray8) {
         if width == 0 || rect.is_empty() {
@@ -174,6 +225,40 @@ impl Framebuffer {
         );
     }
 
+    /// Returns a newly allocated framebuffer in the requested orientation.
+    #[must_use]
+    pub fn rotated(&self, rotation: Rotation) -> Self {
+        if rotation == Rotation::None {
+            return self.clone();
+        }
+        let output_size = rotation.output_size(self.size);
+        let mut pixels = vec![0; self.pixels.len()];
+        let output_stride = output_size.width as usize;
+
+        for source_y in 0..self.size.height {
+            for source_x in 0..self.size.width {
+                let (destination_x, destination_y) = match rotation {
+                    Rotation::None => (source_x, source_y),
+                    Rotation::Clockwise90 => (self.size.height - 1 - source_y, source_x),
+                    Rotation::Clockwise180 => (
+                        self.size.width - 1 - source_x,
+                        self.size.height - 1 - source_y,
+                    ),
+                    Rotation::Clockwise270 => (source_y, self.size.width - 1 - source_x),
+                };
+                let source_index = source_y as usize * self.stride_bytes() + source_x as usize;
+                let destination_index =
+                    destination_y as usize * output_stride + destination_x as usize;
+                pixels[destination_index] = self.pixels[source_index];
+            }
+        }
+
+        Self {
+            size: output_size,
+            pixels,
+        }
+    }
+
     fn index(&self, point: Point) -> Option<usize> {
         (point.x < self.size.width && point.y < self.size.height)
             .then(|| point.y as usize * self.stride_bytes() + point.x as usize)
@@ -185,7 +270,7 @@ mod tests {
     use paper_display::{Point, Rect, Size};
     use proptest::prelude::*;
 
-    use super::{Framebuffer, Gray8};
+    use super::{Framebuffer, Gray8, Rotation};
 
     #[test]
     fn clips_filled_rectangles() {
@@ -195,6 +280,32 @@ mod tests {
         assert_eq!(frame.get(Point::new(1, 1)), Some(Gray8::WHITE));
         assert_eq!(frame.get(Point::new(2, 1)), Some(Gray8::BLACK));
         assert_eq!(frame.get(Point::new(3, 2)), Some(Gray8::BLACK));
+    }
+
+    #[test]
+    fn coverage_blends_ink_over_existing_gray() {
+        let mut frame = Framebuffer::new(Size::new(2, 1), Gray8::WHITE).unwrap();
+        frame.blend_rect(Rect::new(0, 0, 1, 1), Gray8::BLACK, 128);
+        frame.blend_rect(Rect::new(1, 0, 1, 1), Gray8(64), 255);
+
+        assert_eq!(frame.pixels(), &[127, 64]);
+    }
+
+    #[test]
+    fn right_angle_rotation_preserves_exact_pixel_order() {
+        let frame = Framebuffer::from_pixels(Size::new(2, 3), vec![1, 2, 3, 4, 5, 6]).unwrap();
+
+        let clockwise = frame.rotated(Rotation::Clockwise90);
+        assert_eq!(clockwise.size(), Size::new(3, 2));
+        assert_eq!(clockwise.pixels(), &[5, 3, 1, 6, 4, 2]);
+
+        let half_turn = frame.rotated(Rotation::Clockwise180);
+        assert_eq!(half_turn.size(), Size::new(2, 3));
+        assert_eq!(half_turn.pixels(), &[6, 5, 4, 3, 2, 1]);
+
+        let counter_clockwise = frame.rotated(Rotation::Clockwise270);
+        assert_eq!(counter_clockwise.size(), Size::new(3, 2));
+        assert_eq!(counter_clockwise.pixels(), &[2, 4, 6, 1, 3, 5]);
     }
 
     proptest! {

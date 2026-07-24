@@ -58,7 +58,9 @@ include `cs_line` in the named panel profile.
   words put the first pixel in the low nibble, so the backend reverses the four
   nibbles of each uploaded word. Protocol vectors test `01 23` → `3210`.
 - The implemented physical backend is deliberately full-screen only: packed
-  Gray4 INIT/GC16. Direct Gray8, partial, and A2 profiles are not advertised.
+  Gray4 and canonical Gray8 INIT/GC16. Gray8 is quantized and streamed as
+  controller-order Gray4 without an intermediate packed frame. Partial and A2
+  profiles are not advertised.
 - HRDY and display-engine polling share the wall-clock deadline from the named
   panel profile.
 - Panel size, image-buffer address, firmware, and LUT are probed rather than
@@ -83,6 +85,9 @@ Verify the SPI node, GPIO chip, CS/reset/ready offsets, timing budgets, native
 dimensions, and FPC VCOM; zero or duplicate safety-critical values are rejected.
 Start `max_spi_hz` at 1 MHz. Profiles reject values above 12.5 MHz, the rate
 audited in Waveshare's Raspberry Pi implementation.
+Set `rotation_degrees` to the clockwise right-angle transform that maps the
+application's logical page to the controller's native dimensions. The recorded
+portrait fixture uses `90`.
 
 ## Cable assembly for the recorded fixture
 
@@ -157,7 +162,21 @@ documentation. Never reverse, reseat, or hot-plug either ribbon while powered.
    bounded observation sleep it repeats reset, identity verification, VCOM
    application, and readback before white INIT cleanup and final sleep. Any
    identity or readback mismatch aborts before refresh.
-6. Add partial and A2 experiments only after the full path is stable.
+6. Render the accepted typography page only with separate authorization:
+
+   ```sh
+   paperos-hardware specimen \
+     --config hardware/panels.local.toml \
+     --profile desk-6in-hd \
+     --allow-hardware \
+     --allow-vcom-write \
+     --allow-refresh
+   ```
+
+   The command renders in logical portrait, applies the profile rotation,
+   performs a full GC16 update, holds for the bounded observation interval,
+   then repeats identity/VCOM verification before white INIT cleanup and sleep.
+7. Add partial and A2 experiments only after the full path is stable.
 
 Do not start with a complex Daily page: calibration bars, one-pixel borders,
 corner labels, checkerboards, and a typography specimen make orientation,

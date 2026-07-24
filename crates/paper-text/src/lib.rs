@@ -8,7 +8,7 @@ use core::fmt;
 
 use cosmic_text::{
     Align, Attrs, Buffer, Color, Ellipsize, EllipsizeHeightLimit, Family, FontSystem, Metrics,
-    Shaping, SwashCache, Weight, Wrap,
+    Shaping, SwashCache, Weight, Wrap, fontdb,
 };
 use paper_display::Size;
 
@@ -259,6 +259,22 @@ impl CosmicTextEngine {
     pub fn new() -> Self {
         Self {
             font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+        }
+    }
+
+    /// Creates an engine backed only by the supplied font bytes.
+    ///
+    /// Unlike [`Self::new`], this does not discover host fonts or inherit the
+    /// host locale. It is the deterministic constructor for previews, golden
+    /// renders, and deployed pages with bundled assets.
+    pub fn new_with_font_data(fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        let mut database = fontdb::Database::new();
+        for font in fonts {
+            database.load_font_data(font);
+        }
+        Self {
+            font_system: FontSystem::new_with_locale_and_db("en-US".to_owned(), database),
             swash_cache: SwashCache::new(),
         }
     }

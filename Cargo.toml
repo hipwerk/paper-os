@@ -2,6 +2,7 @@
 members = [
     "apps/daily",
     "apps/paperos-hardware",
+    "apps/specimen",
     "crates/paper-assets",
     "crates/paper-display",
     "crates/paper-graphics",
@@ -37,6 +38,7 @@ paper-runtime = { path = "crates/paper-runtime" }
 paper-simulator = { path = "crates/paper-simulator" }
 paper-text = { path = "crates/paper-text" }
 paper-ui = { path = "crates/paper-ui" }
+paperos-specimen = { path = "apps/specimen" }
 serde = { version = "1.0.229", features = ["derive"] }
 signal-hook = { version = "0.4.4", default-features = false }
 spidev = "0.7.1"

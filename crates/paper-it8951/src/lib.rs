@@ -44,6 +44,18 @@ const IMPLEMENTED_FULL_PROFILES: &[UpdateProfile] = &[
         false,
         UpdateConstraints::UNRESTRICTED,
     ),
+    UpdateProfile::new(
+        PixelFormat::Gray8,
+        Waveform::Initialize,
+        false,
+        UpdateConstraints::UNRESTRICTED,
+    ),
+    UpdateProfile::new(
+        PixelFormat::Gray8,
+        Waveform::Grayscale,
+        false,
+        UpdateConstraints::UNRESTRICTED,
+    ),
 ];
 
 /// Bounded polling policy for the IT8951 display engine.
@@ -227,6 +239,17 @@ const fn controller_gray4_word(first: u8, second: u8) -> u16 {
     u16::from_le_bytes([first.rotate_left(4), second.rotate_left(4)])
 }
 
+const fn gray8_to_gray4(pixel: u8) -> u16 {
+    (pixel as u16 + 8) / 17
+}
+
+const fn controller_gray8_word(pixels: &[u8]) -> u16 {
+    gray8_to_gray4(pixels[0])
+        | (gray8_to_gray4(pixels[1]) << 4)
+        | (gray8_to_gray4(pixels[2]) << 8)
+        | (gray8_to_gray4(pixels[3]) << 12)
+}
+
 /// Lowest common protocol operations, implemented by Linux SPI or an MCU HAL.
 ///
 /// Each method represents one complete IT8951 transaction, including its
@@ -285,8 +308,8 @@ pub enum UpdateError {
     ShortStride,
     /// The source slice does not contain every requested row.
     ShortBuffer,
-    /// IT8951 word uploads require an even encoded byte count per row.
-    OddRowBytes,
+    /// IT8951 word uploads require complete four-pixel groups per row.
+    IncompleteWord,
 }
 
 impl fmt::Display for UpdateError {
@@ -297,7 +320,7 @@ impl fmt::Display for UpdateError {
             Self::GeometryTooLarge => "update geometry exceeds IT8951 command fields",
             Self::ShortStride => "update stride is shorter than one encoded row",
             Self::ShortBuffer => "update pixel buffer does not contain every source row",
-            Self::OddRowBytes => "encoded IT8951 rows must contain an even number of bytes",
+            Self::IncompleteWord => "IT8951 source rows must contain complete four-pixel groups",
         })
     }
 }
@@ -601,8 +624,8 @@ impl<T: Transport> It8951Display<T> {
             .pixel_format
             .row_bytes(request.region.size.width)
             .ok_or(UpdateError::GeometryTooLarge)?;
-        if row_bytes % 2 != 0 {
-            return Err(UpdateError::OddRowBytes);
+        if !request.region.size.width.is_multiple_of(4) {
+            return Err(UpdateError::IncompleteWord);
         }
         if request.stride_bytes < row_bytes {
             return Err(UpdateError::ShortStride);
@@ -640,14 +663,12 @@ impl<T: Transport> It8951Display<T> {
         )?;
 
         let format = match request.pixel_format {
-            PixelFormat::Gray4 => PIXEL_FORMAT_GRAY4,
-            PixelFormat::Gray8 | PixelFormat::Gray2 | PixelFormat::Monochrome1 => {
+            PixelFormat::Gray4 | PixelFormat::Gray8 => PIXEL_FORMAT_GRAY4,
+            PixelFormat::Gray2 | PixelFormat::Monochrome1 => {
                 return Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile));
             }
         };
-        if request.pixel_format == PixelFormat::Gray4 {
-            self.controller.write_register(REGISTER_PACKED_WRITE, 1)?;
-        }
+        self.controller.write_register(REGISTER_PACKED_WRITE, 1)?;
         self.controller
             .transport
             .command(COMMAND_LOAD_IMAGE_AREA)
@@ -659,16 +680,35 @@ impl<T: Transport> It8951Display<T> {
                 .map_err(Error::Transport)?;
         }
 
-        let words = (0..request.region.size.height as usize).flat_map(|row| {
-            let start = row * request.stride_bytes;
-            request.pixels[start..start + row_bytes]
-                .chunks_exact(2)
-                .map(|pair| controller_gray4_word(pair[0], pair[1]))
-        });
-        self.controller
-            .transport
-            .write_words(words)
-            .map_err(Error::Transport)?;
+        match request.pixel_format {
+            PixelFormat::Gray4 => {
+                let words = (0..request.region.size.height as usize).flat_map(|row| {
+                    let start = row * request.stride_bytes;
+                    request.pixels[start..start + row_bytes]
+                        .chunks_exact(2)
+                        .map(|pair| controller_gray4_word(pair[0], pair[1]))
+                });
+                self.controller
+                    .transport
+                    .write_words(words)
+                    .map_err(Error::Transport)?;
+            }
+            PixelFormat::Gray8 => {
+                let words = (0..request.region.size.height as usize).flat_map(|row| {
+                    let start = row * request.stride_bytes;
+                    request.pixels[start..start + row_bytes]
+                        .chunks_exact(4)
+                        .map(controller_gray8_word)
+                });
+                self.controller
+                    .transport
+                    .write_words(words)
+                    .map_err(Error::Transport)?;
+            }
+            PixelFormat::Gray2 | PixelFormat::Monochrome1 => {
+                return Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile));
+            }
+        }
         self.controller
             .transport
             .command(COMMAND_LOAD_IMAGE_END)
@@ -1074,13 +1114,16 @@ mod tests {
     }
 
     #[test]
-    fn gray8_is_not_advertised_or_executed_by_the_physical_backend() {
+    fn gray8_is_streamed_as_packed_gray4_at_the_controller_boundary() {
         let info = DeviceInfo {
             panel_size: Size::new(4, 1),
             image_buffer_address: 0x1234_5678,
             ..device_info(b"M641")
         };
-        let transport = FakeTransport::default();
+        let transport = FakeTransport {
+            reads: vec![0, 0],
+            ..FakeTransport::default()
+        };
         let mut display = It8951Display::new(
             Controller::new(transport),
             probe_report(info),
@@ -1091,25 +1134,19 @@ mod tests {
             display
                 .capabilities()
                 .profile(PixelFormat::Gray8, Waveform::Grayscale)
-                .is_none()
+                .is_some()
         );
-        assert_eq!(
-            display.update(UpdateRequest {
+        display
+            .update(UpdateRequest {
                 region: Rect::from_size(info.panel_size),
                 pixel_format: PixelFormat::Gray8,
                 stride_bytes: 4,
                 pixels: &[0, 64, 128, 255],
                 waveform: Waveform::Grayscale,
-            }),
-            Err(Error::InvalidUpdate(UpdateError::UnsupportedProfile))
-        );
-        assert!(
-            display
-                .into_controller()
-                .into_transport()
-                .operations
-                .is_empty()
-        );
+            })
+            .unwrap();
+        let operations = display.into_controller().into_transport().operations;
+        assert!(operations.contains(&Operation::WriteMany(vec![0xf840])));
     }
 
     #[test]
@@ -1233,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn odd_packed_row_is_rejected_before_transport() {
+    fn incomplete_controller_word_is_rejected_before_transport() {
         let info = DeviceInfo {
             panel_size: Size::new(2, 1),
             ..device_info(b"M641")
@@ -1253,7 +1290,7 @@ mod tests {
                 pixels: &[0xff],
                 waveform: Waveform::Initialize,
             }),
-            Err(Error::InvalidUpdate(UpdateError::OddRowBytes))
+            Err(Error::InvalidUpdate(UpdateError::IncompleteWord))
         );
         assert!(
             display
