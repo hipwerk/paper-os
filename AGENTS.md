@@ -40,6 +40,58 @@ linked document by default.
 - Hardware-free diagnostic: `cargo run -p paperos-hardware -- self-test`
 - Full local gate: `just ci` when `just` is installed.
 
+## Protected `main` workflow
+
+`main` rejects direct pushes. It requires a pull request, the
+`Format, lint, test, and docs` status check, and a squash merge. Merge commits
+and rebase merges are disabled. When a user asks to “commit and push to main,”
+complete this entire workflow instead of trying `git push origin main`.
+
+1. Start from an up-to-date `main` and create a short-lived branch before
+   committing:
+
+   ```sh
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git switch -c codex/<short-topic>
+   ```
+
+   If work is already uncommitted on local `main`, create the branch immediately
+   with `git switch -c codex/<short-topic>`; the working tree carries across.
+   Do not create the commit on local `main`.
+2. Run `just ci`, stage deliberately, verify `git diff --cached --check`, and
+   commit on the topic branch.
+3. Push the branch and open a PR targeting `main`:
+
+   ```sh
+   git push -u origin HEAD
+   gh pr create --base main --head codex/<short-topic>
+   gh pr checks <pr-number> --watch
+   ```
+
+4. Fix any CI failure on the same branch and wait for the required check to
+   pass. Then use the repository's only allowed merge method:
+
+   ```sh
+   gh pr merge <pr-number> --squash --delete-branch
+   ```
+
+5. Synchronize and clean up locally:
+
+   ```sh
+   git switch main
+   git pull --ff-only origin main
+   git branch -D codex/<short-topic>
+   git status --short --branch
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+   ```
+
+   Delete the local topic branch only after GitHub reports the PR as merged.
+   The squash commit on `main` is the canonical commit to report; its hash
+   differs from the topic-branch commit. The final worktree must be clean and
+   local `main` must equal `origin/main`.
+
 ## Engineering rules
 
 - Keep dependencies flowing downward as documented; never let applications or
